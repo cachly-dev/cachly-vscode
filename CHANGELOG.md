@@ -11,6 +11,76 @@
 
 ---
 
+## [0.9.4] – 2026-06-01 — *"CLS auto-learn"*
+
+### Added
+- **Compiler Learning Stream hook** — `setup` now installs a post-commit Git hook so the Brain auto-captures a lesson whenever a compiler error disappears after an edit.
+
+---
+
+## [0.9.3] – 2026-06-01 — *"Full lifecycle protocol"*
+
+### Added
+- **`CLAUDE.md` + `AGENTS.md` provisioning** — setup writes both files with the complete Brain lifecycle protocol (session start/end, recall-before-task, learn-after-fix).
+
+### Changed
+- Sanitized recall rendering so lesson output is safe to display inline.
+
+---
+
+## [0.9.2] – 2026-05-31 — *"JSONC-safe settings"*
+
+### Fixed
+- Parse `.vscode/settings.json` as JSONC — comments previously made `JSON.parse` throw, which left a stale cache and returned 404 on every recall. Setup no longer wipes `settings.json`. Added `parseJsonc` tests.
+
+---
+
+## [0.9.1] – 2026-05-30 — *"Recall results show up"*
+
+### Fixed
+- Recall endpoint returns `top_lessons` (not `lessons`) — the chat participant and "Recall for This File" now display results correctly.
+
+---
+
+## [0.9.0] – 2026-05-30 — *"Brain Doctor"*
+
+### Added
+- **Brain Doctor** diagnostic command + dedicated output channel.
+- **Getting-started walkthrough** to connect, save and recall in three steps.
+- **`@cachly` chat participant** — recall, save, status and doctor from the chat panel.
+- Testable config library with 20 unit tests.
+
+---
+
+## [0.8.11] – 2026-05-28 — *"Resilient config"*
+
+### Fixed
+- `apiBaseUrl()` now guards an empty `cachly.apiUrl`.
+- Read-through `instanceId` so `settings.json` wins over a stale cache.
+
+---
+
+## [0.8.9] – 2026-05-27 — *"Telemetry version fix"*
+
+### Fixed
+- Corrected the telemetry version reported by the extension.
+
+---
+
+## [0.8.8] – 2026-05-26 — *"Brain-from-git ready"*
+
+### Added
+- Wired the `SendBrainFromGitReady` email trigger.
+
+---
+
+## [0.8.7] – 2026-05-26 — *"Honest Brain states"*
+
+### Added
+- Status bar now distinguishes **empty**, **degraded** and **setup-needed** Brain states instead of collapsing them into one.
+
+---
+
 ## [0.8.5] – 2026-05-25 — *"Always know your Brain's state"*
 
 The status bar finally explains itself.
