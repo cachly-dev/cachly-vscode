@@ -1,0 +1,25 @@
+# Development + config files not needed in the VSIX
+.vscode/**
+.github/**
+.eslintrc*
+.prettierrc*
+.editorconfig
+*.config.*
+tsconfig.json
+
+# Source maps (reduce package size; not needed for end users)
+**/*.map
+
+# Source TypeScript — only dist/ ships
+src/**
+**/*.ts
+!src/extension.ts
+
+# Node / package management
+node_modules/**
+npm-debug.log*
+
+# Test & CI artifacts
+**/*.test.*
+coverage/**
+*.tsbuildinfo
