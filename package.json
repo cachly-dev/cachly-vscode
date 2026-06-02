@@ -2,12 +2,13 @@
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
   "description": "AI Brain for VS Code — your AI finally remembers. Status bar lesson counter, ambient learning, CodeLens hints, team Brain sharing, Memory Crystal 💎, cost savings tracker, one-click trial setup.",
-  "version": "0.9.4",
+  "version": "0.9.5",
   "publisher": "cachly-dev",
+  "icon": "images/logo.png",
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/HeinrichNebula/cachly"
+    "url": "https://github.com/cachly-dev/cachly-vscode"
   },
   "engines": {
     "vscode": "^1.85.0"
@@ -18,19 +19,15 @@
   ],
   "keywords": [
     "ai",
-    "zed",
     "mcp",
-    "claude",
-    "copilot",
-    "persistent",
+    "model-context-protocol",
+    "ai-assistant",
+    "persistent-memory",
     "ambient-learning",
     "brain",
-    "cursor",
-    "windsurf",
     "cachly",
     "codelens",
     "team",
-    "cline",
     "memory"
   ],
   "activationEvents": [
