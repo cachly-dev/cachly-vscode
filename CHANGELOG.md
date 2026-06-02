@@ -2,6 +2,15 @@
 
 ---
 
+## [0.9.5] – 2026-06-02 — *"Clean slate"*
+
+### Changed
+- **Marketplace metadata** — removed third-party keywords to comply with Marketplace policy; refined keyword set to `mcp`, `model-context-protocol`, `ai-assistant`, `persistent-memory`, `ambient-learning`, `memory`.
+- **Repository link** now points at the public mirror `cachly-dev/cachly-vscode`.
+- **Extension icon** — added the Cachly lightning logo (`images/logo.png`).
+
+---
+
 ## [0.8.5] – 2026-05-25 — *"Always know your Brain's state"*
 
 The status bar finally explains itself.
