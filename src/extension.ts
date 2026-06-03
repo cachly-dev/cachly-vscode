@@ -9,6 +9,8 @@ import {
   isValidApiKey,
   isValidInstanceId,
   parseJsonc,
+  buildClsPostCommitHook,
+  CLS_HOOK_VERSION,
   type BrainStatus,
 } from './lib/config';
 
@@ -57,6 +59,18 @@ interface BrainHealth {
   teamAuthors: string[];
   crystal: { summary: string; patterns_hit: number; created_at: string } | null;
   pendingLessons: number; // locally queued offline, not yet synced
+  insights: BrainInsights | null;
+}
+
+interface BrainInsights {
+  minutes_saved: number;
+  dollars_saved: number;
+  recalls_total: number;
+  reuse_pct: number;
+  ttfr_p50_sec: number;
+  ttfr_p90_sec: number;
+  currency: string;
+  hourly_rate: number;
 }
 
 // ~$3 per 1M tokens (GPT-4o input blended rate)
@@ -98,7 +112,7 @@ async function flushOfflineQueue(): Promise<number> {
   const apiKey = config.get<string>('apiKey', '');
   const instanceId = await getEffectiveInstanceId();
   const baseUrl = apiBaseUrl(config);
-  if (!apiKey || !instanceId) return 0;
+  if (!isValidApiKey(apiKey) || !instanceId) return 0;
 
   let synced = 0;
   const failed: OfflineLesson[] = [];
@@ -313,7 +327,7 @@ export function activate(context: vscode.ExtensionContext) {
     const bootConfig = vscode.workspace.getConfiguration('cachly');
     const bootKey = bootConfig.get<string>('apiKey', '');
     const bootInstance = bootConfig.get<string>('instanceId', '');
-    if (!bootKey || !bootInstance) {
+    if (!isValidApiKey(bootKey) || !bootInstance) {
       // Small delay so VS Code finishes loading before hitting the network
       setTimeout(() => {
         void silentAutoSetup(context).then((provisioned) => {
@@ -372,7 +386,7 @@ function startRefreshLoop() {
   // then let updateStatusBar do the full async resolution on every tick.
   const instanceIdQuick = config.get<string>('instanceId', '');
 
-  if (!apiKey || !instanceIdQuick) {
+  if (!isValidApiKey(apiKey) || !instanceIdQuick) {
     statusBarItem.text = '$(brain) cachly: click to connect';
     statusBarItem.command = 'cachly.setup';
     statusBarItem.tooltip = 'Connect your AI Brain — free, one-click setup (no credit card)';
@@ -508,9 +522,10 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     memoryUsedBytes: 0, memoryLimitBytes: 0, memoryUsedPct: 0,
     iqBoostPct: 0, teamAuthors: [], crystal: null,
     pendingLessons: extensionContext?.globalState.get<OfflineLesson[]>(OFFLINE_QUEUE_KEY, []).length ?? 0,
+    insights: null,
   };
 
-  if (!apiKey || !instanceId) return result;
+  if (!isValidApiKey(apiKey) || !instanceId) return result;
 
   // Instance fetch with one transient-retry — a single network blip or slow
   // container restart must not flip the status bar to OFFLINE permanently.
@@ -576,6 +591,14 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     const status = memErr instanceof HttpError ? memErr.status : 0;
     result.status = (status === 401 || status === 403) ? 'setup_needed' : 'degraded';
   }
+
+  // Insights (best-effort — graceful 404/error means endpoint not yet available)
+  try {
+    const insightsData = await apiGet(`${baseUrl}/api/v1/insights`, apiKey) as BrainInsights | null;
+    if (insightsData && typeof insightsData.minutes_saved === 'number') {
+      result.insights = insightsData;
+    }
+  } catch { /* insights endpoint unavailable — ignore */ }
 
   return result;
 }
@@ -710,6 +733,10 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
       stream.button({ command: 'cachly.setup', title: 'Connect Brain' });
       return {};
     }
+    if (!isValidApiKey(apiKey)) {
+      stream.markdown('⚠️ API key looks malformed (expected `cky_live_…`). Check your settings.');
+      return {};
+    }
 
     const command = request.command;
     const prompt = request.prompt.trim();
@@ -820,7 +847,7 @@ async function triggerSessionRecall() {
   const apiKey = config.get<string>('apiKey', '');
   const instanceId = await getEffectiveInstanceId();
   const baseUrl = apiBaseUrl(config);
-  if (!apiKey || !instanceId) return;
+  if (!isValidApiKey(apiKey) || !instanceId) return;
   try {
     await apiPost(`${baseUrl}/api/v1/instances/${instanceId}/recall`, apiKey, { source: 'vscode' });
   } catch { /* non-critical */ }
@@ -937,7 +964,7 @@ async function handleClsDiagnosticsChange(e: vscode.DiagnosticChangeEvent) {
   const apiKey = config.get<string>('apiKey', '');
   const baseUrl = apiBaseUrl(config);
   const instanceId = await getEffectiveInstanceId();
-  if (!apiKey || !instanceId) return;
+  if (!isValidApiKey(apiKey) || !instanceId) return;
 
   const MAX_TRACK = 50; // cap to avoid memory growth
 
@@ -1185,8 +1212,10 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
   const config = vscode.workspace.getConfiguration('cachly');
   const BASE_URL = apiBaseUrl(config);
 
-  // Re-check inside the timeout — another activation path may have filled them already
-  if (config.get<string>('apiKey', '') && config.get<string>('instanceId', '')) return true;
+  // Re-check inside the timeout — another activation path may have filled them already.
+  // Use isValidApiKey so a malformed/partial key from a race doesn't count as "done".
+  const existingKey = config.get<string>('apiKey', '');
+  if (isValidApiKey(existingKey) && config.get<string>('instanceId', '')) return true;
 
   let apiKey = '';
   let instanceId = '';
@@ -1859,7 +1888,10 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
   // .git/hooks/post-commit — CLS (Continuous Learning Stream): auto-learns every
   // commit into the brain. Mirrors the MCP autopilot so VS-Code-only users get
   // ambient learning too. Best-effort, idempotent, preserves existing hooks.
-  await installClsHook(targetRoot, instanceId);
+  // The API key is embedded (into local .git/, never committed) so the hook's
+  // cls-ingest call can authenticate — same posture as the editor MCP config.
+  const clsKey = vscode.workspace.getConfiguration('cachly').get<string>('apiKey', '');
+  await installClsHook(targetRoot, instanceId, clsKey || undefined);
 
   const m = extensionContext.globalState.get<Record<string, string>>('gitRootInstanceMap', {});
   m[targetRoot] = instanceId;
@@ -1871,38 +1903,40 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
  * (sdk/mcp/src/index.ts). Idempotent: skips if our marker is already present,
  * appends if another hook exists, creates+chmods otherwise. Never throws.
  */
-async function installClsHook(targetRoot: string, instanceId: string): Promise<void> {
+async function installClsHook(targetRoot: string, instanceId: string, apiKey?: string): Promise<void> {
   try {
     const gitDir = path.join(targetRoot, '.git');
     if (!fs.existsSync(gitDir)) return; // not a git repo (or a worktree file — skip)
     const hookDir = path.join(gitDir, 'hooks');
     const hookPath = path.join(hookDir, 'post-commit');
     await fs.promises.mkdir(hookDir, { recursive: true });
-    const hookScript = [
-      `#!/bin/sh`,
-      `# cachly CLS — Continuous Learning Stream (installed by Cachly VS Code extension)`,
-      `# Runs silently on every commit to keep your brain up to date.`,
-      `CACHLY_INSTANCE="${instanceId}"`,
-      `SHA=$(git rev-parse HEAD 2>/dev/null || echo "")`,
-      `MSG=$(git log -1 --pretty=%B 2>/dev/null | head -1 | tr '"' "'" | cut -c1-200)`,
-      `FILES=$(git diff-tree --no-commit-id -r --name-only HEAD 2>/dev/null | tr '\\n' ',' | sed 's/,$//')`,
-      `node -e "try{require('child_process').execSync('npx @cachly-dev/mcp-server@latest cls-ingest \\''+ JSON.stringify({instance_id:'$CACHLY_INSTANCE',source:'git_commit',payload:{message:'$MSG',sha:'$SHA',files:'$FILES'.split(',').filter(Boolean)}})+'\\'' ,{stdio:'ignore',timeout:5000})}catch(e){}" 2>/dev/null &`,
-      `exit 0`,
-    ].join('\n');
+    const hookScript = buildClsPostCommitHook(instanceId, apiKey);
     let existingHook = '';
     try { existingHook = await fs.promises.readFile(hookPath, 'utf8'); } catch { /* no existing hook */ }
-    if (existingHook.includes('cachly CLS')) {
-      log('CLS hook already present in .git/hooks/post-commit');
-      return;
-    }
-    if (existingHook.trim().length > 0) {
-      await fs.promises.writeFile(hookPath, existingHook.trimEnd() + '\n\n' + hookScript + '\n', 'utf8');
-      log('Appended CLS hook to existing .git/hooks/post-commit');
-    } else {
+
+    if (!existingHook) {
       await fs.promises.writeFile(hookPath, hookScript + '\n', 'utf8');
       try { await fs.promises.chmod(hookPath, 0o755); } catch { /* Windows: chmod is a no-op */ }
       log('Installed CLS hook at .git/hooks/post-commit');
+      return;
     }
+    if (existingHook.includes(`cachly CLS — Continuous Learning Stream ${CLS_HOOK_VERSION}`)) {
+      log('CLS hook already current in .git/hooks/post-commit');
+      return;
+    }
+    // Matches any prior cachly block (marker → exit 0), optionally its shebang —
+    // so old/broken v1 hooks are upgraded in place rather than skipped forever.
+    const oldBlock = /(?:#!\/bin\/sh\n)?# cachly CLS[\s\S]*?\nexit 0\n?/;
+    if (oldBlock.test(existingHook)) {
+      const replaced = existingHook.replace(oldBlock, hookScript);
+      await fs.promises.writeFile(hookPath, replaced.endsWith('\n') ? replaced : replaced + '\n', 'utf8');
+      try { await fs.promises.chmod(hookPath, 0o755); } catch { /* no-op on Windows */ }
+      log('Upgraded CLS hook in .git/hooks/post-commit');
+      return;
+    }
+    // Foreign hook with no cachly block → append ours.
+    await fs.promises.writeFile(hookPath, existingHook.trimEnd() + '\n\n' + hookScript + '\n', 'utf8');
+    log('Appended CLS hook to existing .git/hooks/post-commit');
   } catch (e) {
     log('CLS hook install skipped (non-critical)', (e as Error).message);
   }
@@ -2269,6 +2303,24 @@ function buildHealthHtml(health: BrainHealth): string {
     ? `<h2>💎 Memory Crystal</h2><blockquote>${esc(health.crystal.summary)}</blockquote><p style="opacity:.6;font-size:.9em">Generated ${esc(health.crystal.created_at)} · ${health.crystal.patterns_hit} patterns</p>`
     : '';
 
+  const insightsSection = health.insights
+    ? (() => {
+        const ins = health.insights!;
+        const mins = ins.minutes_saved.toFixed(0);
+        const dollars = ins.dollars_saved.toFixed(2);
+        const reuse = ins.reuse_pct.toFixed(1);
+        const ttfr = ins.ttfr_p50_sec > 0 ? `${ins.ttfr_p50_sec.toFixed(0)}s` : '—';
+        const curr = ins.currency === 'EUR' ? '€' : ins.currency;
+        return `<h2>💰 ROI Summary (this tenant)</h2>
+          <table>
+            <tr><td>Developer time saved</td><td><strong>${mins} min</strong></td></tr>
+            <tr><td>Estimated cost saved</td><td><strong>${curr}${dollars}</strong> <em style="opacity:.6">at ${curr}${ins.hourly_rate}/h</em></td></tr>
+            <tr><td>Knowledge reuse</td><td><strong>${reuse}%</strong> <em style="opacity:.6">of recalls cross-author</em></td></tr>
+            <tr><td>Time-to-first-recall (p50)</td><td>${ttfr}</td></tr>
+          </table>`;
+      })()
+    : '';
+
   return `
     ${offlineBanner}
     ${pendingBanner}
@@ -2307,6 +2359,7 @@ function buildHealthHtml(health: BrainHealth): string {
       ${lessonRows}
     </table>
 
+    ${insightsSection}
     ${teamSection}
     ${crystalSection}
 
@@ -2387,7 +2440,7 @@ function wrapHtml(body: string): string {
 async function checkMcpSetupAndNudge(context: vscode.ExtensionContext): Promise<void> {
   const config = vscode.workspace.getConfiguration('cachly');
   const apiKey = config.get<string>('apiKey', '');
-  if (!apiKey) return; // Brain not connected at all — handled by auto-onboarding
+  if (!isValidApiKey(apiKey)) return; // Brain not connected (or key malformed) — let auto-onboarding handle it
 
   const nudgeShown = context.globalState.get<boolean>('mcpNudgeShown', false);
   if (nudgeShown) return;
@@ -2445,6 +2498,8 @@ async function recallForFileCommand(): Promise<void> {
     if (action === 'Connect Brain') void setupAICommand();
     return;
   }
+  // Guard against a malformed key that passes the truthy check but would 401 at the API.
+  if (!isValidApiKey(apiKey)) return;
 
   const editor = vscode.window.activeTextEditor;
   const fileName = editor ? path.basename(editor.document.fileName) : '';

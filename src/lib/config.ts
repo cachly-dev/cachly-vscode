@@ -101,6 +101,46 @@ export function instanceUrl(baseUrl: string, instanceId: string): string {
 }
 
 /**
+ * Build the `.git/hooks/post-commit` CLS (Continuous Learning Stream) script.
+ *
+ * Robustness — the previous inline version interpolated the commit message into
+ * a `node -e "... message:'$MSG' ..."` JS string, so any message with an
+ * apostrophe ("don't") produced invalid JS and the hook silently ingested
+ * nothing (and was injectable). This version:
+ *   • passes message/sha/files to node via ENVIRONMENT VARIABLES (no JS-source
+ *     interpolation → no quoting/injection breakage), and
+ *   • hands the JSON to the CLI via execFileSync (no shell re-parsing).
+ *   • embeds CACHLY_JWT only when provided so `cls-ingest` can authenticate.
+ *
+ * Kept in sync with sdk/mcp/src/cls-hook.ts.
+ */
+export const CLS_HOOK_VERSION = 'v2';
+
+export function buildClsPostCommitHook(instanceId: string, apiKey?: string): string {
+  const nodeProgram =
+    "try{" +
+    "var p={instance_id:process.env.CACHLY_BRAIN_INSTANCE_ID,source:'git_commit'," +
+    "payload:{message:process.env.CLS_MSG||'',sha:process.env.CLS_SHA||''," +
+    "files:(process.env.CLS_FILES||'').split(',').filter(Boolean)}};" +
+    "require('child_process').execFileSync('npx',['@cachly-dev/mcp-server@latest','cls-ingest',JSON.stringify(p)]," +
+    "{stdio:'ignore',timeout:8000});" +
+    "}catch(e){}";
+  return [
+    `#!/bin/sh`,
+    `# cachly CLS — Continuous Learning Stream ${CLS_HOOK_VERSION} (installed by Cachly VS Code extension)`,
+    `# Runs silently on every commit to keep your brain up to date.`,
+    `export CACHLY_BRAIN_INSTANCE_ID="${instanceId}"`,
+    ...(apiKey ? [`export CACHLY_JWT="${apiKey}"`] : []),
+    `CLS_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")`,
+    `CLS_MSG=$(git log -1 --pretty=%B 2>/dev/null | head -1 | cut -c1-200)`,
+    `CLS_FILES=$(git diff-tree --no-commit-id -r --name-only HEAD 2>/dev/null | tr '\\n' ',' | sed 's/,$//')`,
+    `export CLS_SHA CLS_MSG CLS_FILES`,
+    `node -e "${nodeProgram}" 2>/dev/null &`,
+    `exit 0`,
+  ].join('\n');
+}
+
+/**
  * Parse JSONC (JSON with Comments) — the format VS Code uses for settings.json.
  *
  * Plain `JSON.parse` THROWS on `//` / `/* *​/` comments and trailing commas,

@@ -8,6 +8,8 @@ import {
   isValidInstanceId,
   instanceUrl,
   parseJsonc,
+  buildClsPostCommitHook,
+  CLS_HOOK_VERSION,
 } from './config';
 
 describe('normalizeBaseUrl', () => {
@@ -97,6 +99,25 @@ describe('isValidApiKey', () => {
   it('trims whitespace before validating', () => {
     expect(isValidApiKey('  cky_live_abc  ')).toBe(true);
   });
+
+  // Settings-Race regression tests:
+  // silentAutoSetup writes apiKey then instanceId in two separate async steps.
+  // The refresh loop and triggerSessionRecall fire immediately on activation.
+  // These cases capture values that are truthy but would 401 at the API —
+  // isValidApiKey must reject them so no network call is made.
+  it('rejects values that are truthy but not valid keys (race-window garbage)', () => {
+    // Partial key — write interrupted before suffix
+    expect(isValidApiKey('cky_live_')).toBe(false);
+    // Wrong prefix family (old Keycloak JWT leak into wrong setting)
+    expect(isValidApiKey('eyJhbGciOiJSUzI1NiJ9.something')).toBe(false);
+    // Only the prefix word, no body
+    expect(isValidApiKey('cky_')).toBe(false);
+    // JSON blob accidentally stored (misconfigured settings.json)
+    expect(isValidApiKey('{"api_key":"cky_live_abc"}')).toBe(false);
+    // Spaces/newlines that survive a copy-paste race
+    expect(isValidApiKey('cky_live_ abc')).toBe(false);
+    expect(isValidApiKey('cky_live_\nabc')).toBe(false);
+  });
 });
 
 describe('isValidInstanceId', () => {
@@ -159,3 +180,26 @@ describe('parseJsonc', () => {
   });
 });
 
+
+describe('buildClsPostCommitHook', () => {
+  it('embeds instance id, version marker, and shebang', () => {
+    const hook = buildClsPostCommitHook('inst-9');
+    expect(hook.startsWith('#!/bin/sh')).toBe(true);
+    expect(hook).toContain('export CACHLY_BRAIN_INSTANCE_ID="inst-9"');
+    expect(hook).toContain(`cachly CLS — Continuous Learning Stream ${CLS_HOOK_VERSION}`);
+    expect(hook.trimEnd().endsWith('exit 0')).toBe(true);
+  });
+
+  it('embeds the API key only when provided', () => {
+    expect(buildClsPostCommitHook('i', 'cky_live_x')).toContain('export CACHLY_JWT="cky_live_x"');
+    expect(buildClsPostCommitHook('i')).not.toContain('CACHLY_JWT');
+  });
+
+  it('passes commit data via env (apostrophe-safe), not JS-source interpolation', () => {
+    const hook = buildClsPostCommitHook('i');
+    expect(hook).toContain('process.env.CLS_MSG');
+    expect(hook).not.toContain("'$MSG'");
+    expect(hook).toContain('execFileSync');
+    expect(hook).not.toContain('execSync');
+  });
+});

@@ -2,7 +2,7 @@
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
   "description": "AI Brain for VS Code — your AI finally remembers. Status bar lesson counter, ambient learning, CodeLens hints, team Brain sharing, Memory Crystal 💎, cost savings tracker, one-click trial setup.",
-  "version": "0.9.5",
+  "version": "0.9.6",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
   "license": "Apache-2.0",
@@ -117,7 +117,11 @@
         },
         "cachly.lessonSaveMode": {
           "type": "string",
-          "enum": ["auto", "confirm", "manual"],
+          "enum": [
+            "auto",
+            "confirm",
+            "manual"
+          ],
           "enumDescriptions": [
             "Save immediately with no prompts (topic and lesson are auto-detected)",
             "Show a single notification to confirm, edit or skip before saving",
@@ -151,10 +155,22 @@
         "description": "Recall, save and inspect your Brain's lessons. Try: recall <topic>, save <lesson>, status.",
         "isSticky": true,
         "commands": [
-          { "name": "recall", "description": "Search your Brain for relevant lessons" },
-          { "name": "save", "description": "Save the current discussion as a Brain lesson" },
-          { "name": "status", "description": "Show Brain health and stats" },
-          { "name": "doctor", "description": "Diagnose your Brain connection" }
+          {
+            "name": "recall",
+            "description": "Search your Brain for relevant lessons"
+          },
+          {
+            "name": "save",
+            "description": "Save the current discussion as a Brain lesson"
+          },
+          {
+            "name": "status",
+            "description": "Show Brain health and stats"
+          },
+          {
+            "name": "doctor",
+            "description": "Diagnose your Brain connection"
+          }
         ]
       }
     ],
@@ -168,22 +184,35 @@
             "id": "cachly.connect",
             "title": "Connect your Brain",
             "description": "One click to start a free trial or paste an existing API key. The status bar will turn green when your Brain is online.\n[Connect Brain](command:cachly.setup)\n\nAlready have a key? [Open Settings](command:workbench.action.openSettings?%5B%22cachly%22%5D)",
-            "media": { "markdown": "media/walkthrough/connect.md" },
-            "completionEvents": ["onCommand:cachly.setup"]
+            "media": {
+              "markdown": "media/walkthrough/connect.md"
+            },
+            "completionEvents": [
+              "onCommand:cachly.setup"
+            ]
           },
           {
             "id": "cachly.firstLesson",
             "title": "Save your first lesson",
             "description": "Teach your Brain something. Select code or just run the command, and it remembers across sessions, restarts and machines.\n[Save a Lesson](command:cachly.saveLesson)",
-            "media": { "markdown": "media/walkthrough/lesson.md" },
-            "completionEvents": ["onCommand:cachly.saveLesson"]
+            "media": {
+              "markdown": "media/walkthrough/lesson.md"
+            },
+            "completionEvents": [
+              "onCommand:cachly.saveLesson"
+            ]
           },
           {
             "id": "cachly.firstRecall",
             "title": "Recall what it learned",
             "description": "Open a file and let the Brain surface relevant lessons — or run Brain Doctor anytime to verify everything is healthy.\n[Recall for This File](command:cachly.recallForFile)\n\n[Run Brain Doctor](command:cachly.diagnose)",
-            "media": { "markdown": "media/walkthrough/recall.md" },
-            "completionEvents": ["onCommand:cachly.recallForFile", "onCommand:cachly.diagnose"]
+            "media": {
+              "markdown": "media/walkthrough/recall.md"
+            },
+            "completionEvents": [
+              "onCommand:cachly.recallForFile",
+              "onCommand:cachly.diagnose"
+            ]
           }
         ]
       }
