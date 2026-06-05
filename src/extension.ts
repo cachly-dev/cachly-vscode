@@ -77,6 +77,12 @@ interface BrainInsights {
 const TOKENS_PER_RECALL = 1200;
 const COST_PER_TOKEN = 0.000003;
 
+function fmtTokens(n: number): string {
+  if (n >= 1_000_000) return `~${(n / 1_000_000).toFixed(1)}M tokens`;
+  if (n >= 1_000)     return `~${(n / 1_000).toFixed(0)}k tokens`;
+  return `~${n} tokens`;
+}
+
 // ── Offline Lesson Queue ──────────────────────────────────────────────────────
 // When the Brain is unreachable (no API key configured, or network error),
 // lessons are stored locally in globalState and synced automatically once
@@ -457,7 +463,7 @@ async function updateStatusBar() {
         ? `${health.totalRecalls}/${health.recallLimit} recalls`
         : `${health.totalRecalls} recalls`;
       const tokenSuffix = health.estimatedTokensSaved >= 1000
-        ? ` · ~${(health.estimatedTokensSaved / 1000).toFixed(0)}k tok`
+        ? ` · ${fmtTokens(health.estimatedTokensSaved).replace(' tokens', ' tok')}`
         : '';
       const iqSuffix = health.iqBoostPct > 0 ? ` · 📈${health.iqBoostPct.toFixed(0)}%` : '';
       statusBarItem.text = `${icon} Brain: ${health.lessons} lessons · ${recallLabel}${tokenSuffix}${iqSuffix}`;
@@ -466,7 +472,7 @@ async function updateStatusBar() {
         `**🧠 Brain active — learning from your work**\n\n` +
         `- 📚 **${health.lessons}** lessons remembered\n` +
         `- 🔁 **${health.totalRecalls}** recalls${health.recallLimit > 0 ? ` of ${health.recallLimit}` : ''} · ~${savedHrs}h saved\n` +
-        (health.estimatedTokensSaved >= 1000 ? `- 💰 ~${(health.estimatedTokensSaved / 1000).toFixed(0)}k tokens saved\n` : '') +
+        (health.estimatedTokensSaved >= 1000 ? `- 💰 ${fmtTokens(health.estimatedTokensSaved)} saved\n` : '') +
         (health.status === 'degraded' ? `\n⚠️ _Degraded: brain is reachable but some features are slow._\n` : '') +
         `\n_Click to open Brain Health._`,
       );
@@ -2233,9 +2239,7 @@ function buildHealthHtml(health: BrainHealth): string {
     : health.status === 'empty' ? '🌱 Ready (no lessons yet)'
     : health.status === 'setup_needed' ? '🔐 Re-auth needed'
     : health.status === 'degraded' ? '⚠️ Degraded' : '❌ Unreachable';
-  const tokensSaved = health.estimatedTokensSaved > 1000
-    ? `~${(health.estimatedTokensSaved / 1000).toFixed(1)}k tokens`
-    : `~${health.estimatedTokensSaved} tokens`;
+  const tokensSaved = fmtTokens(health.estimatedTokensSaved);
   const usedMB = (health.memoryUsedBytes / (1024 * 1024)).toFixed(2);
   const limitMB = (health.memoryLimitBytes / (1024 * 1024)).toFixed(0);
   const pct = health.memoryUsedPct.toFixed(1);
@@ -2341,7 +2345,7 @@ function buildHealthHtml(health: BrainHealth): string {
       <tr><td>Status</td><td>${statusIcon}</td></tr>
       <tr><td>Tier</td><td>${esc(health.tier)}</td></tr>
       <tr><td>Lessons Learned</td><td><strong>${health.lessons}</strong>${health.pendingLessons > 0 ? ` <em style="opacity:.6">+ ${health.pendingLessons} pending sync</em>` : ''}</td></tr>
-      <tr><td>Context Entries</td><td>${health.contexts}</td></tr>
+      <tr><td>Context Entries</td><td>${health.contexts > 0 ? health.contexts : '<span style="opacity:.5">0 — use <code>remember_context</code> to store WIP context</span>'}</td></tr>
       <tr><td>Total Recalls</td><td><strong>${health.totalRecalls.toLocaleString()}</strong></td></tr>
       ${recallLimitRow}
       ${iqBoostRow}
@@ -2374,9 +2378,7 @@ function buildHealthHtml(health: BrainHealth): string {
 }
 
 function buildLessonsHtml(health: BrainHealth): string {
-  const tokensSaved = health.estimatedTokensSaved > 1000
-    ? `~${(health.estimatedTokensSaved / 1000).toFixed(1)}k tokens`
-    : `~${health.estimatedTokensSaved} tokens`;
+  const tokensSaved = fmtTokens(health.estimatedTokensSaved);
   const rows = health.topLessons.map(l => {
     const icon = l.outcome === 'success' ? '✅' : l.outcome === 'failure' ? '❌' : '⚠️';
     const date = l.ts ? new Date(l.ts).toLocaleDateString() : 'unknown';
