@@ -10,8 +10,6 @@
   using `cachly-dev/cachly-action`) on GitHub, or a `.gitlab-ci.yml` include (using
   the new GitLab CI/CD template) on GitLab. Idempotent and non-destructive — never
   overwrites an existing Cachly CI file.
-- **`brain_confirm_ci`** — closed-loop CI self-calibration: confirmed failures boost lesson confidence +15%, false positives reduce it −10% (capped 5–99%). Works automatically via `cachly-action confirm` mode or `cachly brain ci-confirm` CLI.
-- **`cachly brain` CLI commands** — `lessons`, `recall`, `stats`, `ci-confirm`, `federation list/contribute` now available from the terminal.
 
 ---
 

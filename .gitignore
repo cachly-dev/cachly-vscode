@@ -1,8 +1,0 @@
-node_modules/
-dist/
-out/
-.env
-.env.production
-.env.staging
-.env.local
-*.vsix
