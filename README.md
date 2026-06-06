@@ -5,11 +5,7 @@
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=cachly-dev.cachly-brain">
-    <img src="https://img.shields.io/visual-studio-marketplace/v/cachly-dev.cachly-brain?logo=visual-studio-code&label=VS%20Code%20Marketplace" alt="VS Code Marketplace" />
-  </a>
-  &nbsp;
-  <a href="https://marketplace.visualstudio.com/items?itemName=cachly-dev.cachly-brain">
-    <img src="https://img.shields.io/visual-studio-marketplace/d/cachly-dev.cachly-brain?label=installs" alt="Installs" />
+    <img src="https://img.shields.io/badge/VS%20Code%20Marketplace-v0.9.7-blue?logo=visual-studio-code&logoColor=white" alt="VS Code Marketplace v0.9.7" />
   </a>
   &nbsp;
   <a href="https://cachly.dev?utm_source=vscode-marketplace&utm_medium=readme&utm_campaign=extension">
