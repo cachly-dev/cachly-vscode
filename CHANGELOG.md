@@ -2,6 +2,16 @@
 
 ---
 
+## [0.9.7] – 2026-06-06 — *"GitLab-aware setup"*
+
+### Added
+- **CI auto-detection** — setup inspects your `origin` remote and scaffolds the
+  matching CI config: a GitHub Actions workflow (`.github/workflows/cachly.yml`)
+  on GitHub, or a `.gitlab-ci.yml` include (using the new GitLab CI/CD template)
+  on GitLab. Idempotent and non-destructive.
+
+---
+
 ## [0.9.6] – 2026-06-05 — *"v4 Move 1"*
 
 ### Added

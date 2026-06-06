@@ -2,7 +2,7 @@
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
   "description": "AI Brain for VS Code — your AI finally remembers. Status bar lesson counter, ambient learning, CodeLens hints, team Brain sharing, Memory Crystal 💎, cost savings tracker, one-click trial setup.",
-  "version": "0.9.6",
+  "version": "0.9.7",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
   "license": "Apache-2.0",
