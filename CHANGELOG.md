@@ -5,18 +5,41 @@
 ## [0.9.7] – 2026-06-06 — *"GitLab-aware setup"*
 
 ### Added
-- **CI auto-detection** — setup inspects your `origin` remote and scaffolds the
-  matching CI config: a GitHub Actions workflow (`.github/workflows/cachly.yml`)
-  on GitHub, or a `.gitlab-ci.yml` include (using the new GitLab CI/CD template)
-  on GitLab. Idempotent and non-destructive.
+- **CI auto-detection** — setup now inspects your `origin` remote and scaffolds the
+  matching CI config: a GitHub Actions workflow (`.github/workflows/cachly.yml`,
+  using `cachly-dev/cachly-action`) on GitHub, or a `.gitlab-ci.yml` include (using
+  the new GitLab CI/CD template) on GitLab. Idempotent and non-destructive — never
+  overwrites an existing Cachly CI file.
+- **`brain_confirm_ci`** — closed-loop CI self-calibration: confirmed failures boost lesson confidence +15%, false positives reduce it −10% (capped 5–99%). Works automatically via `cachly-action confirm` mode or `cachly brain ci-confirm` CLI.
+- **`cachly brain` CLI commands** — `lessons`, `recall`, `stats`, `ci-confirm`, `federation list/contribute` now available from the terminal.
 
 ---
 
-## [0.9.6] – 2026-06-05 — *"v4 Move 1"*
+## [0.9.6] – 2026-06-03 — *"ROI insights + race-safe auth"*
 
 ### Added
-- **`brain_confirm_ci`** — closed-loop CI self-calibration: confirmed failures boost lesson confidence +15%, false positives reduce it −10% (capped 5–99%). Works automatically via `cachly-action confirm` mode or `cachly brain ci-confirm` CLI.
-- **`cachly brain` CLI commands** — `lessons`, `recall`, `stats`, `ci-confirm`, `federation list/contribute` now available from the terminal.
+- **ROI Insights panel** — Brain Health view now shows a "💰 ROI Summary" section
+  fetched from `GET /api/v1/insights`: developer minutes saved, estimated € cost saved
+  (at configured hourly rate), knowledge-reuse %, and time-to-first-recall p50.
+  Rendered as a clean table, best-effort (panel stays fully functional when the
+  endpoint is unavailable or returns an error).
+- **`BrainInsights` type** added to the `BrainHealth` interface.
+
+### Fixed
+- **Settings-Race / Brain shows "setup\_needed" on fresh activation** — all API-sending
+  hot-paths (`fetchBrainHealth`, `startRefreshLoop`, `triggerSessionRecall`,
+  `flushOfflineQueue`, `handleClsDiagnosticsChange`, `checkMcpSetupAndNudge`, chat
+  handler, inline recall) now use `isValidApiKey()` instead of a plain truthy check.
+  Previously a partial or malformed key written by `silentAutoSetup` during the
+  activation-time race could pass the `!apiKey` gate, trigger a 401 at the API, and
+  flip the status bar to "re-auth needed" for the entire session.
+- **CLS git hook now actually works** — the post-commit hook was calling
+  `npx @cachly-dev/mcp-server cls-ingest` which did not exist as a CLI command (the
+  hook silently ingested nothing). Rewrote to use environment variables for commit data
+  (no JS-source interpolation → safe against apostrophes in messages) and `execFileSync`
+  (no shell re-parsing). Hook version bumped to `v2`; existing broken `v1` hooks are
+  upgraded in place on next setup run. API key now embedded in the local hook so
+  `cls-ingest` can authenticate.
 
 ---
 
