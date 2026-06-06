@@ -8,7 +8,7 @@
   "license": "Apache-2.0",
   "repository": {
     "type": "git",
-    "url": "https://github.com/cachly-dev/cachly-vscode"
+    "url": "https://github.com/cachly-dev/cachly-vscode.git"
   },
   "engines": {
     "vscode": "^1.85.0"
