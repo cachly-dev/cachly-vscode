@@ -115,6 +115,11 @@
           "default": true,
           "description": "Compiler Learning Stream: auto-save a Brain lesson when a compiler error disappears after an edit (CLS Layer 5)"
         },
+        "cachly.proactiveBriefing": {
+          "type": "boolean",
+          "default": true,
+          "description": "Proactively warn when you open a file the Brain knows has a high-risk failure pattern (push briefing, not pull)"
+        },
         "cachly.lessonSaveMode": {
           "type": "string",
           "enum": [

@@ -295,6 +295,20 @@ export function activate(context: vscode.ExtensionContext) {
     );
   }
 
+  // ── Proactive briefing: warn the moment a risky file is opened (push, not pull) ─
+  // v4 Move 2. Calls /instances/:id/briefing with event_type=file_open; if the
+  // Brain holds a high-confidence failure pattern for this file, surface it before
+  // the developer types anything. Debounced + deduped so it never nags.
+  if (cfg.get<boolean>('proactiveBriefing', true)) {
+    context.subscriptions.push(
+      vscode.workspace.onDidOpenTextDocument((doc) => {
+        if (doc.uri.scheme !== 'file') return;
+        if (briefingDebounce) clearTimeout(briefingDebounce);
+        briefingDebounce = setTimeout(() => void proactiveBriefingForDocument(doc), 1200);
+      }),
+    );
+  }
+
   // ── CodeLens: Brain lessons relevant to open file ─────────────────────────
   context.subscriptions.push(
     vscode.languages.registerCodeLensProvider(
@@ -2609,6 +2623,64 @@ async function checkMcpSetupAndNudge(context: vscode.ExtensionContext): Promise<
 // ── Quick Recall for current file ─────────────────────────────────────────────
 // Command: cachly.recallForFile
 // Fetches lessons relevant to the currently open file and shows them in a panel.
+
+// Proactive-briefing module state: debounce timer + per-session dedupe so a file
+// is briefed at most once until its content meaningfully changes.
+let briefingDebounce: ReturnType<typeof setTimeout> | undefined;
+const briefedFiles = new Set<string>();
+
+interface BriefingWarning { topic: string; confidence: number; severity: string; message: string; fix: string }
+interface BriefingResponse { risk_level?: string; warnings?: BriefingWarning[] }
+
+/**
+ * Push a brain briefing for a just-opened file. Surfaces a warning only when the
+ * Brain holds a medium/high-risk failure pattern for it — otherwise stays silent.
+ */
+async function proactiveBriefingForDocument(doc: vscode.TextDocument): Promise<void> {
+  const config = vscode.workspace.getConfiguration('cachly');
+  const apiKey = config.get<string>('apiKey', '');
+  const instanceId = await getEffectiveInstanceId();
+  const baseUrl = apiBaseUrl(config);
+  if (!isValidApiKey(apiKey) || !instanceId) return;
+
+  // Dedupe: only brief a given file once per session.
+  const fileKey = doc.uri.toString();
+  if (briefedFiles.has(fileKey)) return;
+  briefedFiles.add(fileKey);
+
+  // Use a workspace-relative path as the briefing context — richer signal than basename.
+  const relPath = vscode.workspace.asRelativePath(doc.uri, false);
+
+  try {
+    const res = await apiPost(`${baseUrl}/api/v1/instances/${instanceId}/briefing`, apiKey, {
+      event_type: 'file_open',
+      context: relPath,
+    }) as BriefingResponse | undefined;
+
+    const risk = (res?.risk_level ?? 'low').toLowerCase();
+    const warnings = res?.warnings ?? [];
+    if ((risk !== 'medium' && risk !== 'high') || warnings.length === 0) return;
+
+    const top = warnings[0];
+    const icon = risk === 'high' ? '🛑' : '⚠️';
+    const label = `${icon} cachly: ${top.message || top.topic}`;
+    const action = await vscode.window.showWarningMessage(label, 'Show fix', 'Dismiss');
+    if (action === 'Show fix' && top.fix) {
+      const panel = vscode.window.createWebviewPanel(
+        'cachlyBriefing',
+        `${icon} Brain warning: ${path.basename(relPath)}`,
+        vscode.ViewColumn.Beside,
+        { enableScripts: false },
+      );
+      panel.webview.html = buildRecallHtml(top.topic, [
+        { topic: top.topic, what_worked: top.fix, outcome: 'failure' },
+      ]);
+    }
+  } catch {
+    // Proactive feature — never surface errors for it. Allow a retry later.
+    briefedFiles.delete(fileKey);
+  }
+}
 
 async function recallForFileCommand(): Promise<void> {
   const config = vscode.workspace.getConfiguration('cachly');
