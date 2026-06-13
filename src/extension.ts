@@ -60,6 +60,14 @@ interface BrainHealth {
   crystal: { summary: string; patterns_hit: number; created_at: string } | null;
   pendingLessons: number; // locally queued offline, not yet synced
   insights: BrainInsights | null;
+  costPerCallUsd: number; // configured per-avoided-call price used for ROI (0 = use default)
+}
+
+// One day of activity, from the insights endpoint's 30-day trend array.
+interface TrendBucket {
+  date: string;   // YYYY-MM-DD
+  events: number; // mcp_events rows for that day
+  fixes: number;
 }
 
 interface BrainInsights {
@@ -71,6 +79,21 @@ interface BrainInsights {
   ttfr_p90_sec: number;
   currency: string;
   hourly_rate: number;
+  trend?: TrendBucket[]; // last 30 days, one bucket per day — drives WoW
+}
+
+// Week-over-week change from the trend array: last 7 days vs the prior 7.
+// pct is null when there's no prior-week baseline to compare against.
+function computeWoW(trend: TrendBucket[] | undefined): { thisWeek: number; lastWeek: number; pct: number | null } {
+  if (!trend || trend.length === 0) return { thisWeek: 0, lastWeek: 0, pct: null };
+  const sorted = [...trend].sort((a, b) => a.date.localeCompare(b.date));
+  const last7 = sorted.slice(-7);
+  const prior7 = sorted.slice(-14, -7);
+  const sum = (b: TrendBucket[]) => b.reduce((s, d) => s + (d.events ?? 0), 0);
+  const thisWeek = sum(last7);
+  const lastWeek = sum(prior7);
+  const pct = lastWeek > 0 ? ((thisWeek - lastWeek) / lastWeek) * 100 : null;
+  return { thisWeek, lastWeek, pct };
 }
 
 // ~$3 per 1M tokens (GPT-4o input blended rate)
@@ -543,14 +566,15 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     iqBoostPct: 0, teamAuthors: [], crystal: null,
     pendingLessons: extensionContext?.globalState.get<OfflineLesson[]>(OFFLINE_QUEUE_KEY, []).length ?? 0,
     insights: null,
+    costPerCallUsd: 0,
   };
 
   if (!isValidApiKey(apiKey) || !instanceId) return result;
 
   // Instance fetch with one transient-retry — a single network blip or slow
   // container restart must not flip the status bar to OFFLINE permanently.
-  const fetchInstOnce = () => apiGet(`${baseUrl}/api/v1/instances/${instanceId}`, apiKey) as Promise<{ tier?: string } | null>;
-  let instData: { tier?: string } | null = null;
+  const fetchInstOnce = () => apiGet(`${baseUrl}/api/v1/instances/${instanceId}`, apiKey) as Promise<{ tier?: string; cost_per_call_usd?: number } | null>;
+  let instData: { tier?: string; cost_per_call_usd?: number } | null = null;
   try {
     instData = await fetchInstOnce();
   } catch (e1) {
@@ -564,6 +588,9 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
   if (instData !== null && instData !== undefined) {
     result.status = 'healthy';
     if (instData.tier) { result.tier = instData.tier; }
+    if (typeof instData.cost_per_call_usd === 'number' && instData.cost_per_call_usd > 0) {
+      result.costPerCallUsd = instData.cost_per_call_usd;
+    }
   }
 
   // Memory fetch with one transient-retry to avoid showing "Degraded" on a single network blip.
@@ -2453,12 +2480,28 @@ function buildHealthHtml(health: BrainHealth): string {
         const reuse = ins.reuse_pct.toFixed(1);
         const ttfr = ins.ttfr_p50_sec > 0 ? `${ins.ttfr_p50_sec.toFixed(0)}s` : '—';
         const curr = ins.currency === 'EUR' ? '€' : ins.currency;
+        // Cost-per-avoided-call row: prefer the instance's configured price, else the $0.002 default.
+        const cpc = health.costPerCallUsd > 0 ? health.costPerCallUsd : 0.002;
+        const cpcConfigured = health.costPerCallUsd > 0;
+        const cpcRow = `<tr><td>Cost per avoided call</td><td><strong>$${cpc}</strong> <em style="opacity:.6">${cpcConfigured ? 'your configured rate' : 'default — set it on the instance page'}</em></td></tr>`;
+        // Week-over-week activity from the 30-day trend array.
+        const wow = computeWoW(ins.trend);
+        const wowRow = wow.pct === null
+          ? `<tr><td>This week's activity</td><td><strong>${wow.thisWeek}</strong> events <em style="opacity:.6">(no prior-week baseline yet)</em></td></tr>`
+          : (() => {
+              const arrow = wow.pct > 0 ? '▲' : wow.pct < 0 ? '▼' : '—';
+              const color = wow.pct > 0 ? '#3fb950' : wow.pct < 0 ? '#f85149' : 'inherit';
+              const sign = wow.pct > 0 ? '+' : '';
+              return `<tr><td>Week-over-week activity</td><td><strong>${wow.thisWeek}</strong> vs ${wow.lastWeek} last week &nbsp;<span style="color:${color}">${arrow} ${sign}${wow.pct.toFixed(0)}%</span></td></tr>`;
+            })();
         return `<h2>💰 ROI Summary (this tenant)</h2>
           <table>
             <tr><td>Developer time saved</td><td><strong>${mins} min</strong></td></tr>
             <tr><td>Estimated cost saved</td><td><strong>${curr}${dollars}</strong> <em style="opacity:.6">at ${curr}${ins.hourly_rate}/h</em></td></tr>
+            ${cpcRow}
             <tr><td>Knowledge reuse</td><td><strong>${reuse}%</strong> <em style="opacity:.6">of recalls cross-author</em></td></tr>
             <tr><td>Time-to-first-recall (p50)</td><td>${ttfr}</td></tr>
+            ${wowRow}
           </table>`;
       })()
     : '';
