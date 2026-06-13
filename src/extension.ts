@@ -13,6 +13,7 @@ import {
   CLS_HOOK_VERSION,
   type BrainStatus,
 } from './lib/config';
+import { computeWoW, type TrendBucket } from './lib/wow';
 
 interface TopLesson {
   topic: string;
@@ -63,13 +64,6 @@ interface BrainHealth {
   costPerCallUsd: number; // configured per-avoided-call price used for ROI (0 = use default)
 }
 
-// One day of activity, from the insights endpoint's 30-day trend array.
-interface TrendBucket {
-  date: string;   // YYYY-MM-DD
-  events: number; // mcp_events rows for that day
-  fixes: number;
-}
-
 interface BrainInsights {
   minutes_saved: number;
   dollars_saved: number;
@@ -80,20 +74,6 @@ interface BrainInsights {
   currency: string;
   hourly_rate: number;
   trend?: TrendBucket[]; // last 30 days, one bucket per day — drives WoW
-}
-
-// Week-over-week change from the trend array: last 7 days vs the prior 7.
-// pct is null when there's no prior-week baseline to compare against.
-function computeWoW(trend: TrendBucket[] | undefined): { thisWeek: number; lastWeek: number; pct: number | null } {
-  if (!trend || trend.length === 0) return { thisWeek: 0, lastWeek: 0, pct: null };
-  const sorted = [...trend].sort((a, b) => a.date.localeCompare(b.date));
-  const last7 = sorted.slice(-7);
-  const prior7 = sorted.slice(-14, -7);
-  const sum = (b: TrendBucket[]) => b.reduce((s, d) => s + (d.events ?? 0), 0);
-  const thisWeek = sum(last7);
-  const lastWeek = sum(prior7);
-  const pct = lastWeek > 0 ? ((thisWeek - lastWeek) / lastWeek) * 100 : null;
-  return { thisWeek, lastWeek, pct };
 }
 
 // ~$3 per 1M tokens (GPT-4o input blended rate)
