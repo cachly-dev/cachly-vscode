@@ -2,7 +2,7 @@
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
   "description": "AI Brain for VS Code — your AI finally remembers. Status bar lesson counter, ambient learning, CodeLens hints, team Brain sharing, Memory Crystal 💎, cost savings tracker, one-click trial setup.",
-  "version": "0.9.8",
+  "version": "0.9.9",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
   "license": "Apache-2.0",
@@ -124,6 +124,11 @@
           "type": "boolean",
           "default": true,
           "description": "Show a short 'welcome back' Brain briefing (lessons + recalls) once when the editor opens"
+        },
+        "cachly.autoContext": {
+          "type": "boolean",
+          "default": true,
+          "description": "Automatically capture the file you're working on as a WIP context entry in your Brain (once per file per session)"
         },
         "cachly.lessonSaveMode": {
           "type": "string",

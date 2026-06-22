@@ -149,6 +149,11 @@ interface AmbientEntry { sampleEdit: string; count: number; prompted: boolean }
 const ambientMap = new Map<string, AmbientEntry>();
 let ambientDebounce: NodeJS.Timeout | undefined;
 
+// Auto-context capture state: debounce + per-session dedupe so we POST each file
+// at most once per editor session (no API spam).
+let autoContextDebounce: ReturnType<typeof setTimeout> | undefined;
+const capturedContextFiles = new Set<string>();
+
 // ── CLS: Compiler Learning Stream state ──────────────────────────────────────
 // Tracks diagnostic errors that appeared, then disappeared after an edit.
 // When an error vanishes → infer a (problem, fix) pair and save as a brain lesson.
@@ -305,6 +310,20 @@ export function activate(context: vscode.ExtensionContext) {
         if (doc.uri.scheme !== 'file') return;
         if (briefingDebounce) clearTimeout(briefingDebounce);
         briefingDebounce = setTimeout(() => void proactiveBriefingForDocument(doc), 1200);
+      }),
+    );
+  }
+
+  // ── Auto-capture WIP context → fills the Brain's "Context Entries" ─────────────
+  // The plugin captures what you're working on (once per file per session, heavily
+  // debounced) so context populates without an MCP agent. Opt-out: cachly.autoContext.
+  if (cfg.get<boolean>('autoContext', true)) {
+    context.subscriptions.push(
+      vscode.window.onDidChangeActiveTextEditor((editor) => {
+        if (!editor || editor.document.uri.scheme !== 'file') return;
+        const docRef = editor.document;
+        if (autoContextDebounce) clearTimeout(autoContextDebounce);
+        autoContextDebounce = setTimeout(() => void captureWipContext(docRef), 8000);
       }),
     );
   }
@@ -918,6 +937,32 @@ async function showStartupBriefing() {
       .then((c) => {
         if (c === 'Open Brain') void showBrainHealthPanel();
       });
+  } catch {
+    /* non-critical */
+  }
+}
+
+// Capture a compact WIP context note for the active file — once per session,
+// heavily debounced — so the Brain's Context Entries populate from your work
+// without needing an MCP agent. POSTs to the /context endpoint.
+async function captureWipContext(doc: vscode.TextDocument) {
+  const config = vscode.workspace.getConfiguration('cachly');
+  if (!config.get<boolean>('autoContext', true)) return;
+  const apiKey = config.get<string>('apiKey', '');
+  const instanceId = await getEffectiveInstanceId();
+  const baseUrl = apiBaseUrl(config);
+  if (!isValidApiKey(apiKey) || !instanceId) return;
+  const fileName = doc.uri.path.split('/').pop() ?? doc.uri.path;
+  if (!fileName || capturedContextFiles.has(fileName)) return;
+  const firstLine = (doc.lineCount > 0 ? doc.lineAt(0).text : '').trim().slice(0, 80);
+  const content = `EDITING ${fileName}${firstLine ? ` — ${firstLine}` : ''} (${doc.languageId})`;
+  try {
+    await apiPost(`${baseUrl}/api/v1/instances/${instanceId}/context`, apiKey, {
+      key: fileName,
+      content,
+      ttl: 86400,
+    });
+    capturedContextFiles.add(fileName);
   } catch {
     /* non-critical */
   }
