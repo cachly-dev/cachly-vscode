@@ -13,7 +13,6 @@ import {
   CLS_HOOK_VERSION,
   type BrainStatus,
 } from './lib/config';
-import { computeWoW, type TrendBucket } from './lib/wow';
 
 interface TopLesson {
   topic: string;
@@ -61,7 +60,6 @@ interface BrainHealth {
   crystal: { summary: string; patterns_hit: number; created_at: string } | null;
   pendingLessons: number; // locally queued offline, not yet synced
   insights: BrainInsights | null;
-  costPerCallUsd: number; // configured per-avoided-call price used for ROI (0 = use default)
 }
 
 interface BrainInsights {
@@ -73,7 +71,6 @@ interface BrainInsights {
   ttfr_p90_sec: number;
   currency: string;
   hourly_rate: number;
-  trend?: TrendBucket[]; // last 30 days, one bucket per day — drives WoW
 }
 
 // ~$3 per 1M tokens (GPT-4o input blended rate)
@@ -376,6 +373,8 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Session recall on activation + hourly
   triggerSessionRecall();
+  // Visible "welcome back" briefing once per activation (the startup wow).
+  void showStartupBriefing();
   const ONE_HOUR = 60 * 60 * 1000;
   recallTimer = setInterval(() => triggerSessionRecall(), ONE_HOUR);
 
@@ -430,6 +429,25 @@ function startRefreshLoop() {
 
 async function updateStatusBar() {
   try {
+    // Never-connected state: a fresh install has no apiKey/instance. fetchBrainHealth
+    // would report 'unreachable' (→ "OFFLINE"), which wrongly reads as a network blip.
+    // Show a loud, friendly "Connect your Brain" instead so nobody sits in silence.
+    const cfg0 = vscode.workspace.getConfiguration('cachly');
+    const hasKey = isValidApiKey(cfg0.get<string>('apiKey', ''));
+    const hasInstance = !!(await getEffectiveInstanceId());
+    if (!hasKey || !hasInstance) {
+      statusBarItem.text = '$(plug) Connect your Brain';
+      statusBarItem.tooltip = new vscode.MarkdownString(
+        `**🧠 cachly is installed — but not connected yet**\n\n` +
+          `Click to connect your Brain (one browser click). Then your AI gets persistent ` +
+          `memory, automatic learning from your fixes, and a briefing at the start of every session.`,
+      );
+      statusBarItem.command = 'cachly.setup';
+      statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.warningBackground');
+      statusBarItem.show();
+      return;
+    }
+
     const prevRecalls = lastHealth?.totalRecalls ?? 0;
     const health = await fetchBrainHealth();
     lastHealth = health;
@@ -546,15 +564,14 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     iqBoostPct: 0, teamAuthors: [], crystal: null,
     pendingLessons: extensionContext?.globalState.get<OfflineLesson[]>(OFFLINE_QUEUE_KEY, []).length ?? 0,
     insights: null,
-    costPerCallUsd: 0,
   };
 
   if (!isValidApiKey(apiKey) || !instanceId) return result;
 
   // Instance fetch with one transient-retry — a single network blip or slow
   // container restart must not flip the status bar to OFFLINE permanently.
-  const fetchInstOnce = () => apiGet(`${baseUrl}/api/v1/instances/${instanceId}`, apiKey) as Promise<{ tier?: string; cost_per_call_usd?: number } | null>;
-  let instData: { tier?: string; cost_per_call_usd?: number } | null = null;
+  const fetchInstOnce = () => apiGet(`${baseUrl}/api/v1/instances/${instanceId}`, apiKey) as Promise<{ tier?: string } | null>;
+  let instData: { tier?: string } | null = null;
   try {
     instData = await fetchInstOnce();
   } catch (e1) {
@@ -568,9 +585,6 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
   if (instData !== null && instData !== undefined) {
     result.status = 'healthy';
     if (instData.tier) { result.tier = instData.tier; }
-    if (typeof instData.cost_per_call_usd === 'number' && instData.cost_per_call_usd > 0) {
-      result.costPerCallUsd = instData.cost_per_call_usd;
-    }
   }
 
   // Memory fetch with one transient-retry to avoid showing "Degraded" on a single network blip.
@@ -880,6 +894,35 @@ async function triggerSessionRecall() {
   } catch { /* non-critical */ }
 }
 
+// ── Startup briefing: a visible "welcome back" the moment the editor opens ──────
+// The single most tangible wow — surfaces what the Brain holds instead of leaving
+// the value invisible. Fires once per activation, only when there's something to
+// brief (lessons > 0), so it never nags an empty/unconnected Brain. Opt-out via
+// cachly.startupBriefing.
+async function showStartupBriefing() {
+  const config = vscode.workspace.getConfiguration('cachly');
+  if (!config.get<boolean>('startupBriefing', true)) return;
+  const apiKey = config.get<string>('apiKey', '');
+  const instanceId = await getEffectiveInstanceId();
+  if (!isValidApiKey(apiKey) || !instanceId) return;
+  try {
+    const h = await fetchBrainHealth();
+    if (!h || (h.lessons ?? 0) === 0) return;
+    const recallLabel =
+      h.recallLimit > 0 ? `${h.totalRecalls}/${h.recallLimit} recalls this month` : `${h.totalRecalls} recalls`;
+    void vscode.window
+      .showInformationMessage(
+        `🧠 Welcome back — your Brain has ${h.lessons} lesson${h.lessons === 1 ? '' : 's'} · ${recallLabel}. It's briefing your AI this session.`,
+        'Open Brain',
+      )
+      .then((c) => {
+        if (c === 'Open Brain') void showBrainHealthPanel();
+      });
+  } catch {
+    /* non-critical */
+  }
+}
+
 // ── Save Lesson command ───────────────────────────────────────────────────────
 // Modes (cachly.lessonSaveMode):
 //   auto    – save immediately, no prompts (uses prefill data or empty defaults)
@@ -1065,6 +1108,8 @@ async function handleClsDiagnosticsChange(e: vscode.DiagnosticChangeEvent) {
           ...(clsAuthorName ? { author: clsAuthorName } : {}),
         });
         trackVSCodeEvent('vscode_cls_lesson_saved', { apiKey, instanceId, once: true });
+        // Make the invisible auto-learning visible (non-intrusive, auto-dismisses).
+        vscode.window.setStatusBarMessage(`$(brain) cachly learned: ${topic}`, 6000);
       } catch {
         // Network or auth failure — queue locally for later sync
         enqueueOfflineLesson({
@@ -2460,28 +2505,12 @@ function buildHealthHtml(health: BrainHealth): string {
         const reuse = ins.reuse_pct.toFixed(1);
         const ttfr = ins.ttfr_p50_sec > 0 ? `${ins.ttfr_p50_sec.toFixed(0)}s` : '—';
         const curr = ins.currency === 'EUR' ? '€' : ins.currency;
-        // Cost-per-avoided-call row: prefer the instance's configured price, else the $0.002 default.
-        const cpc = health.costPerCallUsd > 0 ? health.costPerCallUsd : 0.002;
-        const cpcConfigured = health.costPerCallUsd > 0;
-        const cpcRow = `<tr><td>Cost per avoided call</td><td><strong>$${cpc}</strong> <em style="opacity:.6">${cpcConfigured ? 'your configured rate' : 'default — set it on the instance page'}</em></td></tr>`;
-        // Week-over-week activity from the 30-day trend array.
-        const wow = computeWoW(ins.trend);
-        const wowRow = wow.pct === null
-          ? `<tr><td>This week's activity</td><td><strong>${wow.thisWeek}</strong> events <em style="opacity:.6">(no prior-week baseline yet)</em></td></tr>`
-          : (() => {
-              const arrow = wow.pct > 0 ? '▲' : wow.pct < 0 ? '▼' : '—';
-              const color = wow.pct > 0 ? '#3fb950' : wow.pct < 0 ? '#f85149' : 'inherit';
-              const sign = wow.pct > 0 ? '+' : '';
-              return `<tr><td>Week-over-week activity</td><td><strong>${wow.thisWeek}</strong> vs ${wow.lastWeek} last week &nbsp;<span style="color:${color}">${arrow} ${sign}${wow.pct.toFixed(0)}%</span></td></tr>`;
-            })();
         return `<h2>💰 ROI Summary (this tenant)</h2>
           <table>
             <tr><td>Developer time saved</td><td><strong>${mins} min</strong></td></tr>
             <tr><td>Estimated cost saved</td><td><strong>${curr}${dollars}</strong> <em style="opacity:.6">at ${curr}${ins.hourly_rate}/h</em></td></tr>
-            ${cpcRow}
             <tr><td>Knowledge reuse</td><td><strong>${reuse}%</strong> <em style="opacity:.6">of recalls cross-author</em></td></tr>
             <tr><td>Time-to-first-recall (p50)</td><td>${ttfr}</td></tr>
-            ${wowRow}
           </table>`;
       })()
     : '';

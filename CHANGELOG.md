@@ -2,20 +2,6 @@
 
 ---
 
-## [0.9.8] – 2026-06-13 — *"Cost transparency + weekly trend"*
-
-### Added
-- **Cost per avoided call** — the Brain Health panel's ROI Summary now shows the
-  per-call price used for savings estimates. It reads the instance's configured
-  `cost_per_call_usd` (set on the instance page) and falls back to the $0.002 default,
-  so the dollar figures reflect your real bill instead of a generic assumption.
-- **Week-over-week activity** — a new ROI row compares this week's Brain activity to
-  the prior week (computed client-side from the insights 30-day trend), with a
-  ▲/▼ indicator and percentage change. Shows a "no baseline yet" hint until two
-  weeks of data exist.
-
----
-
 ## [0.9.7] – 2026-06-06 — *"GitLab-aware setup"*
 
 ### Added

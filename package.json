@@ -120,6 +120,11 @@
           "default": true,
           "description": "Proactively warn when you open a file the Brain knows has a high-risk failure pattern (push briefing, not pull)"
         },
+        "cachly.startupBriefing": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show a short 'welcome back' Brain briefing (lessons + recalls) once when the editor opens"
+        },
         "cachly.lessonSaveMode": {
           "type": "string",
           "enum": [
