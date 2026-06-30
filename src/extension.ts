@@ -83,6 +83,26 @@ function fmtTokens(n: number): string {
   return `~${n} tokens`;
 }
 
+function fmtMoney(amount: number, currency: string): string {
+  const code = currency.toUpperCase() === 'EUR' ? 'EUR' : 'USD';
+  return new Intl.NumberFormat(code === 'EUR' ? 'de-DE' : 'en-US', {
+    style: 'currency',
+    currency: code,
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  }).format(amount);
+}
+
+function fmtDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return '—';
+  if (seconds < 60) return `${Math.round(seconds)}s`;
+  if (seconds < 3600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86400) return `${Math.round(seconds / 3600)}h`;
+  const days = Math.floor(seconds / 86400);
+  const hours = Math.round((seconds % 86400) / 3600);
+  return hours > 0 ? `${days}d ${hours}h` : `${days}d`;
+}
+
 // ── Offline Lesson Queue ──────────────────────────────────────────────────────
 // When the Brain is unreachable (no API key configured, or network error),
 // lessons are stored locally in globalState and synced automatically once
@@ -2529,14 +2549,20 @@ function buildHealthHtml(health: BrainHealth): string {
     : '';
 
   const configuredAuthor = (vscode.workspace.getConfiguration('cachly').get<string>('authorName') ?? '').trim();
+  const teamReuseLine = health.insights
+    ? `<p style="opacity:.82;font-size:.9em"><strong>Knowledge reuse:</strong> ${health.insights.reuse_pct.toFixed(1)}% <em style="opacity:.65">of recalls cross-author</em></p>`
+    : '';
   const teamSection = health.teamAuthors.length >= 1
     ? `<h2>👥 Team Brain Contributors (${health.teamAuthors.length})</h2>
+       ${teamReuseLine}
        <p>${health.teamAuthors.map(a => `<code>${esc(a)}</code>`).join(' · ')}</p>
        ${!configuredAuthor ? `<p style="opacity:.7;font-size:.9em">💡 <strong>Set your name</strong> so your lessons show up here: <em>VS Code Settings → <code>cachly.authorName</code></em></p>` : ''}
-       <p style="opacity:.7;font-size:.9em">To invite teammates: have them install the <strong>Cachly Brain</strong> extension, set <code>cachly.instanceId</code> to <code>${esc(health.teamAuthors[0] ?? '')}</code> and the same API key.</p>`
+       <p style="opacity:.7;font-size:.9em">To invite teammates: have them install the <strong>Cachly Brain</strong> extension and use the same Cachly instance ID and API key.</p>`
     : !configuredAuthor
-      ? `<h2>👥 Team Brain</h2><p style="opacity:.7;font-size:.9em">No team lessons yet. <strong>Set your name</strong> to start attributing lessons: <em>VS Code Settings → <code>cachly.authorName</code></em></p>`
-      : '';
+      ? `<h2>👥 Team Brain</h2>${teamReuseLine}<p style="opacity:.7;font-size:.9em">No team lessons yet. <strong>Set your name</strong> to start attributing lessons: <em>VS Code Settings → <code>cachly.authorName</code></em></p>`
+      : health.insights
+        ? `<h2>👥 Team Brain</h2>${teamReuseLine}`
+        : '';
 
   const crystalSection = health.crystal
     ? `<h2>💎 Memory Crystal</h2><blockquote>${esc(health.crystal.summary)}</blockquote><p style="opacity:.6;font-size:.9em">Generated ${esc(health.crystal.created_at)} · ${health.crystal.patterns_hit} patterns</p>`
@@ -2546,19 +2572,23 @@ function buildHealthHtml(health: BrainHealth): string {
     ? (() => {
         const ins = health.insights!;
         const mins = ins.minutes_saved.toFixed(0);
-        const dollars = ins.dollars_saved.toFixed(2);
-        const reuse = ins.reuse_pct.toFixed(1);
-        const ttfr = ins.ttfr_p50_sec > 0 ? `${ins.ttfr_p50_sec.toFixed(0)}s` : '—';
-        const curr = ins.currency === 'EUR' ? '€' : ins.currency;
-        return `<h2>💰 ROI Summary (this tenant)</h2>
+        const dollars = fmtMoney(ins.dollars_saved, ins.currency);
+        const hourlyRate = fmtMoney(ins.hourly_rate, ins.currency);
+        const ttfr = fmtDuration(ins.ttfr_p50_sec);
+        return `<h2>💰 Brain ROI</h2>
           <table>
             <tr><td>Developer time saved</td><td><strong>${mins} min</strong></td></tr>
-            <tr><td>Estimated cost saved</td><td><strong>${curr}${dollars}</strong> <em style="opacity:.6">at ${curr}${ins.hourly_rate}/h</em></td></tr>
-            <tr><td>Knowledge reuse</td><td><strong>${reuse}%</strong> <em style="opacity:.6">of recalls cross-author</em></td></tr>
+            <tr><td>Estimated cost saved</td><td><strong>${dollars}</strong> <em style="opacity:.6">at ${hourlyRate}/h</em></td></tr>
             <tr><td>Time-to-first-recall (p50)</td><td>${ttfr}</td></tr>
           </table>`;
       })()
     : '';
+  const lessonPrimer = `<blockquote>
+      💡 <strong>How lessons work:</strong> AI assistants call <code>learn_from_attempts</code> after fixing bugs.
+      Each <code>recall_best_solution</code> saves ~1,200 tokens. Your brain currently has <strong>${health.lessons} saved solutions</strong>.
+      <br/><br/>
+      <strong>Ambient Learning:</strong> Cachly watches for repeated typing patterns and <em>asks</em> whether to save them as a Brain lesson — never saves automatically.
+    </blockquote>`;
 
   return `
     ${offlineBanner}
@@ -2566,6 +2596,8 @@ function buildHealthHtml(health: BrainHealth): string {
     <h1>🧠 Cachly Brain Health</h1>
 
     ${upgradeBanner}
+    ${insightsSection}
+    ${lessonPrimer}
 
     <h2>⚡ Recall Activity</h2>
     <p style="font-size:1.1em">
@@ -2598,17 +2630,8 @@ function buildHealthHtml(health: BrainHealth): string {
       ${lessonRows}
     </table>
 
-    ${insightsSection}
     ${teamSection}
     ${crystalSection}
-
-    <hr/>
-    <blockquote>
-      💡 <strong>How lessons work:</strong> AI assistants call <code>learn_from_attempts</code> after fixing bugs.
-      Each <code>recall_best_solution</code> saves ~1,200 tokens. Your brain currently has <strong>${health.lessons} saved solutions</strong>.
-      <br/><br/>
-      <strong>Ambient Learning:</strong> Cachly watches for repeated typing patterns and <em>asks</em> whether to save them as a Brain lesson — never saves automatically.
-    </blockquote>
   `;
 }
 

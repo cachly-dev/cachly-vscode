@@ -129,6 +129,10 @@ This signs you in, detects your editors (GitHub Copilot, Cursor, Windsurf, etc.)
 
 ## Commands
 
+The canonical command-to-capability map for this extension is generated from
+[`../../CACHLY_CAPABILITIES.json`](../../CACHLY_CAPABILITIES.json) and rendered in
+[`../../docs/generated/surface-parity.md`](../../docs/generated/surface-parity.md).
+
 | Command | What it does |
 |---------|-------------|
 | `Cachly: Show Brain Health` | Open the full health panel with stats, storage, recalls |

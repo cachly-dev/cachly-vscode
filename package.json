@@ -233,6 +233,26 @@
       }
     ]
   },
+  "cachlyCapabilities": {
+    "commands": {
+      "cachly.showBrainHealth": "brain_lessons",
+      "cachly.showLessons": "brain_lessons",
+      "cachly.refreshBrain": "session_continuity",
+      "cachly.saveLesson": "brain_lessons",
+      "cachly.setupAI": "setup_auth",
+      "cachly.setup": "setup_auth",
+      "cachly.recallForFile": "semantic_cache_search",
+      "cachly.resetAuth": "setup_auth",
+      "cachly.diagnose": "setup_auth",
+      "cachly.showLogs": "setup_auth"
+    },
+    "chatCommands": {
+      "recall": "semantic_cache_search",
+      "save": "brain_lessons",
+      "status": "brain_lessons",
+      "doctor": "setup_auth"
+    }
+  },
   "scripts": {
     "compile": "tsc -p ./",
     "watch": "tsc -watch -p ./",
