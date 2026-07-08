@@ -13,6 +13,15 @@ import {
   CLS_HOOK_VERSION,
   type BrainStatus,
 } from './lib/config';
+import {
+  buildAmbientHook,
+  mergeAmbientSettings,
+  AMBIENT_SCRIPT_NAMES,
+  AMBIENT_HOOK_VERSION,
+  type AmbientHookEvent,
+  type AmbientHookPaths,
+  type ClaudeSettingsLike,
+} from './lib/ambient';
 
 interface TopLesson {
   topic: string;
@@ -2030,6 +2039,11 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
   const clsKey = vscode.workspace.getConfiguration('cachly').get<string>('apiKey', '');
   await installClsHook(targetRoot, instanceId, clsKey || undefined);
 
+  // .claude/hooks + settings.json — Ambient Recall (push-based memory) for
+  // users who also run Claude Code in this workspace. Mirrors the MCP `init`
+  // so recall/briefing/auto-learn happen automatically, no manual calls.
+  await installAmbientHooksVs(targetRoot, instanceId, clsKey || undefined);
+
   // CI scaffold — auto-detect GitHub vs GitLab from the origin remote and write
   // the matching config (GitHub Action workflow or GitLab include). Idempotent.
   await writeCiConfig(targetRoot, instanceId);
@@ -2080,6 +2094,59 @@ async function installClsHook(targetRoot: string, instanceId: string, apiKey?: s
     log('Appended CLS hook to existing .git/hooks/post-commit');
   } catch (e) {
     log('CLS hook install skipped (non-critical)', (e as Error).message);
+  }
+}
+
+/**
+ * Install the Ambient Recall hooks (.claude/hooks/*.sh + settings.json merge).
+ * Kept in sync with sdk/mcp/src/ambient-hooks.ts installAmbientHooks. Idempotent
+ * and non-destructive (foreign hooks preserved, stale cachly entries upgraded).
+ * Never throws. API key goes into local scripts only — .claude/hooks is
+ * meant for the user's machine, same posture as the CLS hook.
+ */
+async function installAmbientHooksVs(targetRoot: string, instanceId: string, apiKey?: string): Promise<void> {
+  try {
+    const hookDir = path.join(targetRoot, '.claude', 'hooks');
+    await fs.promises.mkdir(hookDir, { recursive: true });
+
+    const events: AmbientHookEvent[] = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'];
+    const paths = {} as AmbientHookPaths;
+    let wrote = false;
+    for (const event of events) {
+      const p = path.join(hookDir, AMBIENT_SCRIPT_NAMES[event]);
+      paths[event] = p;
+      const script = buildAmbientHook(event, instanceId, apiKey) + '\n';
+      let prev = '';
+      try { prev = await fs.promises.readFile(p, 'utf8'); } catch { /* new file */ }
+      if (prev !== script) {
+        await fs.promises.writeFile(p, script, 'utf8');
+        try { await fs.promises.chmod(p, 0o755); } catch { /* Windows: chmod is a no-op */ }
+        wrote = true;
+      }
+    }
+
+    const settingsPath = path.join(targetRoot, '.claude', 'settings.json');
+    let existing: ClaudeSettingsLike = {};
+    let parseOk = true;
+    try {
+      existing = parseJsonc(await fs.promises.readFile(settingsPath, 'utf8')) as ClaudeSettingsLike;
+    } catch (e) {
+      try {
+        await fs.promises.stat(settingsPath);
+        parseOk = false; // exists but unparseable → never overwrite the user's file
+        log('.claude/settings.json exists but could not be parsed — not overwriting', (e as Error).message);
+      } catch { /* truly new file */ }
+    }
+    if (parseOk) {
+      const { settings, changed } = mergeAmbientSettings(existing, paths);
+      if (changed) {
+        await fs.promises.writeFile(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
+        wrote = true;
+      }
+    }
+    if (wrote) log(`Ambient Recall hooks installed/updated (.claude/hooks, ${AMBIENT_HOOK_VERSION})`);
+  } catch (e) {
+    log('Ambient hooks install skipped (non-critical)', (e as Error).message);
   }
 }
 
