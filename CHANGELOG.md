@@ -2,6 +2,23 @@
 
 ---
 
+## [0.10.0] – 2026-07-06 — *"Ambient recall net accounting"*
+
+### Added
+- **Ambient recall net-token accounting** — the Brain Health panel and the
+  status-bar tooltip now show the *net* token impact of recall, not just the
+  savings: lessons surfaced via `@cachly`, tokens injected (the gross cost),
+  estimated tokens saved (~1,200/lesson) and the resulting net. Honest
+  accounting — the net can be negative if recall surfaces noise. (Ambient
+  Recall Tier B.)
+- **Cross-harness rules files** — setup now also writes `.cursor/rules/cachly.mdc`
+  (Cursor, with `alwaysApply` frontmatter), `.windsurfrules` (Windsurf) and
+  `.clinerules` (Cline) alongside CLAUDE.md / AGENTS.md /
+  `.github/copilot-instructions.md`, so the Brain protocol reaches every AI
+  assistant a developer uses, not just Claude/Copilot. (Ambient Recall Tier A.)
+
+---
+
 ## [0.9.7] – 2026-06-06 — *"GitLab-aware setup"*
 
 ### Added

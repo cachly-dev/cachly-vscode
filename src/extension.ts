@@ -214,6 +214,41 @@ let extensionVersion = '0.0.0';
 let sessionLessonsAtActivation = 0;
 let sessionActivatedAt = 0;
 
+// ── Ambient recall net-token accounting (Ambient Recall Tier B, §6.7) ──────────
+// The roadmap (§6.2) requires measuring the *net* token impact of pushing recall
+// into context — not just the gross injected cost. We record injected tokens at
+// the real injection surface (the @cachly participant streams lessons into chat)
+// and, per the extension's own ~TOKENS_PER_RECALL-saved-per-recall model, derive
+// a net estimate that is shown in the Brain Health panel and status-bar tooltip.
+// Persisted cumulatively in globalState; the session view resets each activation.
+const AMBIENT_INJECTED_KEY = 'cachly.ambientInjectedTokens';
+const AMBIENT_INJECTIONS_KEY = 'cachly.ambientInjectionCount';
+let sessionInjectedTokens = 0;
+let sessionInjections = 0;
+
+function estimateTokens(s: string): number {
+  return Math.ceil((s ?? '').length / 4);
+}
+
+// Record one ambient injection (lessons surfaced into the AI's context). Bumps
+// the session + cumulative counters and logs the gross cost. Best-effort — an
+// accounting failure must never affect the recall itself.
+function recordAmbientInjection(injectedTokens: number, lessonsSurfaced: number): void {
+  if (injectedTokens <= 0 || lessonsSurfaced <= 0) return;
+  sessionInjectedTokens += injectedTokens;
+  sessionInjections += lessonsSurfaced;
+  try {
+    if (extensionContext) {
+      const totalTok = extensionContext.globalState.get<number>(AMBIENT_INJECTED_KEY, 0) + injectedTokens;
+      const totalInj = extensionContext.globalState.get<number>(AMBIENT_INJECTIONS_KEY, 0) + lessonsSurfaced;
+      void extensionContext.globalState.update(AMBIENT_INJECTED_KEY, totalTok);
+      void extensionContext.globalState.update(AMBIENT_INJECTIONS_KEY, totalInj);
+    }
+  } catch { /* best-effort */ }
+  log(`ambient-recall: injected ~${injectedTokens} tok across ${lessonsSurfaced} lesson(s) ` +
+    `(session ~${sessionInjectedTokens} tok / ${sessionInjections} surfaced)`);
+}
+
 // Canonical production API base. Read via apiBaseUrl() — never inline config.get
 // with a string default, because vscode's get(key, default) only falls back to
 // the default when the value is `undefined`. A user who has `cachly.apiUrl` set
@@ -556,6 +591,7 @@ async function updateStatusBar() {
         `- 📚 **${health.lessons}** lessons remembered\n` +
         `- 🔁 **${health.totalRecalls}** recalls${health.recallLimit > 0 ? ` of ${health.recallLimit}` : ''} · ~${savedHrs}h saved\n` +
         (health.estimatedTokensSaved >= 1000 ? `- 💰 ${fmtTokens(health.estimatedTokensSaved)} saved\n` : '') +
+        (sessionInjections > 0 ? `- 🔬 Ambient recall (session): ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected\n` : '') +
         (health.status === 'degraded' ? `\n⚠️ _Degraded: brain is reachable but some features are slow._\n` : '') +
         `\n_Click to open Brain Health._`,
       );
@@ -906,13 +942,18 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
       };
 
       stream.markdown(`🧠 **${lessons.length}** lesson${lessons.length === 1 ? '' : 's'} for **${query}**\n\n`);
+      let injectedText = '';
       for (const l of lessons) {
         const body = preview(l.what_worked);
-        stream.markdown(`- **${l.topic}** _(${l.outcome})_${body ? ` — ${body}` : ''}\n`);
+        const line = `- **${l.topic}** _(${l.outcome})_${body ? ` — ${body}` : ''}\n`;
+        injectedText += line;
+        stream.markdown(line);
       }
       if (more > 0) {
         stream.markdown(`\n_+${more} more in your Brain._`);
       }
+      // Net-token accounting: these lessons were pushed into the AI's context.
+      recordAmbientInjection(estimateTokens(injectedText), lessons.length);
     } catch (e) {
       stream.markdown(`✗ Recall failed: ${(e as Error).message}`);
     }
@@ -1971,10 +2012,13 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
   };
   await writeFileContent(mcpPath, JSON.stringify(mcpJson, null, 2));
 
-  // Instruction files — write the SAME marked block to CLAUDE.md (Claude Code),
-  // AGENTS.md (Codex/other agents) and .github/copilot-instructions.md (Copilot)
-  // so every AI tool a user has gets the full lifecycle protocol. Marker-based +
-  // idempotent: we replace only our section and never wipe the user's content.
+  // Instruction/rules files — write the SAME marked block to every AI tool's
+  // convention so a user on any harness gets the full lifecycle protocol:
+  // CLAUDE.md (Claude Code), AGENTS.md (Codex/agents), copilot-instructions.md
+  // (Copilot), .windsurfrules (Windsurf), .clinerules (Cline). Cursor uses a
+  // frontmatter .mdc handled separately below. Marker-based + idempotent: we
+  // replace only our section and never wipe the user's content.
+  // Cross-Harness Tier A — see docs/make_cachly_great_again.md §6.7.
   const BRAIN_START = '<!-- cachly-brain-start -->';
   const BRAIN_END = '<!-- cachly-brain-end -->';
   const brainBlock = `${BRAIN_START}\n${buildCopilotInstructions(instanceId)}${BRAIN_END}`;
@@ -1984,6 +2028,8 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
     path.join(targetRoot, 'CLAUDE.md'),
     path.join(targetRoot, 'AGENTS.md'),
     path.join(targetRoot, '.github', 'copilot-instructions.md'),
+    path.join(targetRoot, '.windsurfrules'),
+    path.join(targetRoot, '.clinerules'),
   ];
   for (const instructionsPath of instructionTargets) {
     let existingInstructions = '';
@@ -2005,6 +2051,34 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
     }
     await writeFileContent(instructionsPath, newInstructions);
   }
+
+  // Cursor: .cursor/rules/cachly.mdc — YAML frontmatter (alwaysApply) makes the
+  // block active every request. Frontmatter lives outside the brain markers, so
+  // idempotent marker-replacement leaves it intact.
+  try {
+    await vscode.workspace.fs.createDirectory(vscode.Uri.file(path.join(targetRoot, '.cursor', 'rules')));
+    const mdcPath = path.join(targetRoot, '.cursor', 'rules', 'cachly.mdc');
+    const frontmatter =
+      '---\n' +
+      'description: Cachly AI Brain — persistent memory protocol (recall before tasks, learn after fixes)\n' +
+      'alwaysApply: true\n' +
+      '---\n\n';
+    let existingMdc = '';
+    try {
+      existingMdc = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(mdcPath))).toString('utf8');
+    } catch { /* new file */ }
+    let newMdc: string;
+    if (existingMdc.includes(BRAIN_START) && existingMdc.includes(BRAIN_END)) {
+      const before = existingMdc.substring(0, existingMdc.indexOf(BRAIN_START));
+      const after = existingMdc.substring(existingMdc.indexOf(BRAIN_END) + BRAIN_END.length);
+      newMdc = before + brainBlock + after;
+    } else if (existingMdc.trim().length > 0) {
+      newMdc = existingMdc.trimEnd() + '\n\n' + brainBlock + '\n';
+    } else {
+      newMdc = frontmatter + brainBlock + '\n';
+    }
+    await writeFileContent(mdcPath, newMdc);
+  } catch { /* non-fatal */ }
 
   // .vscode/settings.json — bind instance to this git root
   const vsDir = path.join(targetRoot, '.vscode');
@@ -2657,6 +2731,25 @@ function buildHealthHtml(health: BrainHealth): string {
       <strong>Ambient Learning:</strong> Cachly watches for repeated typing patterns and <em>asks</em> whether to save them as a Brain lesson — never saves automatically.
     </blockquote>`;
 
+  // Ambient recall net-token accounting (§6.2 "measure net, not gross"). Net =
+  // est. tokens the surfaced lessons save (~TOKENS_PER_RECALL each, the same
+  // model used for "Tokens Saved") minus the tokens injected to surface them.
+  // We show the injected cost openly — net can be negative if recall is noisy.
+  const ambientInjectedTotal = extensionContext?.globalState.get<number>(AMBIENT_INJECTED_KEY, 0) ?? 0;
+  const ambientInjectionsTotal = extensionContext?.globalState.get<number>(AMBIENT_INJECTIONS_KEY, 0) ?? 0;
+  const ambientSavedEst = ambientInjectionsTotal * TOKENS_PER_RECALL;
+  const ambientNet = ambientSavedEst - ambientInjectedTotal;
+  const ambientSection = ambientInjectionsTotal > 0
+    ? `<h2>🔬 Ambient Recall — Net Token Impact</h2>
+       <table>
+         <tr><td>Lessons surfaced (@cachly)</td><td><strong>${ambientInjectionsTotal.toLocaleString()}</strong></td></tr>
+         <tr><td>Tokens injected (gross cost)</td><td>${fmtTokens(ambientInjectedTotal)}</td></tr>
+         <tr><td>Est. tokens saved</td><td>${fmtTokens(ambientSavedEst)} <em style="opacity:.6">(~${TOKENS_PER_RECALL}/lesson)</em></td></tr>
+         <tr><td><strong>Net</strong></td><td><strong style="color:${ambientNet >= 0 ? '#4ade80' : '#f87171'}">${ambientNet >= 0 ? '+' : '−'}${fmtTokens(Math.abs(ambientNet)).replace('~', '')}</strong></td></tr>
+       </table>
+       <p style="opacity:.7;font-size:.85em;margin-top:-6px">This session: ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected. Honest accounting — we show the injected cost, not just the savings.</p>`
+    : '';
+
   return `
     ${offlineBanner}
     ${pendingBanner}
@@ -2673,6 +2766,8 @@ function buildHealthHtml(health: BrainHealth): string {
       ${health.recallLimit > 0 ? `<span style="opacity:.6">(${recallPct.toFixed(1)}%)</span>` : ''}
     </p>
     <p style="opacity:.7;font-size:.9em;margin-top:-8px">Each recall = your AI reused a saved lesson instead of re-researching → ${tokensSaved} saved so far</p>
+
+    ${ambientSection}
 
     <table>
       <tr><th>Metric</th><th>Value</th></tr>
