@@ -258,8 +258,8 @@
     "watch": "tsc -watch -p ./",
     "test": "vitest run",
     "test:watch": "vitest",
-    "package": "node -r ./scripts/polyfill.js node_modules/.bin/vsce package --no-dependencies",
-    "publish": "node -r ./scripts/polyfill.js node_modules/.bin/vsce publish --pat $VSCE_PAT"
+    "package": "node -r ./scripts/polyfill.js node_modules/@vscode/vsce/vsce package --no-dependencies",
+    "publish": "node -r ./scripts/polyfill.js node_modules/@vscode/vsce/vsce publish --pat $VSCE_PAT"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",
