@@ -2,6 +2,37 @@
 
 ---
 
+## [0.11.0] – 2026-07-12 — *"Honest metrics + interactive Brain panel"*
+
+### Changed
+- **Brain panel redesigned and made interactive** — toolbar (Refresh, Lessons,
+  Save lesson, Doctor, Settings), metric cards with real progress meters, a
+  live filter box over lessons (topic/text/author/severity), per-lesson copy
+  buttons, and a one-click "Set your author name" action. Scripts are
+  CSP-nonce-locked; the panel never loads remote code.
+- **Honest metric labels everywhere.** Recall counts now say whether they are
+  *this month* (limited tiers) or *all-time* (unlimited); token/cost figures
+  are labeled as estimates with their basis (~1,200 tok per reused lesson);
+  the ROI section is titled "Value estimate" and each row explains its
+  heuristic. Time-to-first-recall is now "Time to first payoff" (from Brain
+  creation until a lesson was first reused) and is hidden when there is no data.
+- **Solo-Brain team state.** A single-author Brain no longer shows a
+  misleading "0.0% knowledge reuse" — it explains that cross-author metrics
+  appear once a teammate joins, with a button to set your author name.
+- **Over-limit state.** Being over the monthly recall limit now renders a
+  clear banner (with upgrade action) instead of a silently overflowing
+  "15450/500" counter.
+
+### Removed
+- **Hourly `/recall` heartbeat pings.** The extension used to POST `/recall`
+  on activation and every hour, inflating the recall counter that all ROI
+  metrics are derived from. Recalls are now only counted when an AI (or
+  `@cachly` chat) actually reuses a lesson.
+- Fabricated status-bar figures: the "~Xh saved" estimate (8 min per recall)
+  and the "IQ Boost" percentage.
+
+---
+
 ## [0.10.0] – 2026-07-06 — *"Ambient recall net accounting"*
 
 ### Added

@@ -10,27 +10,27 @@ import {
 } from './ambient';
 
 const paths: AmbientHookPaths = {
-  SessionStart: '/w/.claude/hooks/cachly-ambient-session-start.sh',
-  UserPromptSubmit: '/w/.claude/hooks/cachly-ambient-prompt-submit.sh',
-  PreToolUse: '/w/.claude/hooks/cachly-ambient-pre-tool.sh',
-  Stop: '/w/.claude/hooks/cachly-ambient-stop.sh',
+  SessionStart: '/w/.claude/hooks/cachly-ambient-session-start.mjs',
+  UserPromptSubmit: '/w/.claude/hooks/cachly-ambient-prompt-submit.mjs',
+  PreToolUse: '/w/.claude/hooks/cachly-ambient-pre-tool.mjs',
+  Stop: '/w/.claude/hooks/cachly-ambient-stop.mjs',
 };
 
 describe('buildAmbientHook', () => {
-  it('emits a versioned, graceful script per event', () => {
+  it('emits a versioned, graceful cross-platform Node script per event (v3)', () => {
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'] as const) {
       const s = buildAmbientHook(event, 'inst-1');
-      expect(s.startsWith('#!/bin/sh')).toBe(true);
+      expect(s.startsWith('#!/usr/bin/env node')).toBe(true);
       expect(s).toContain(AMBIENT_HOOK_VERSION);
-      expect(s).toContain(`CACHLY_HOOK_EVENT="${event}"`);
-      expect(s).toContain('|| true');
-      expect(s.trimEnd().endsWith('exit 0')).toBe(true);
+      expect(s).toContain(`process.env.CACHLY_HOOK_EVENT = '${event}';`);
+      expect(s).toContain('shell: true'); // resolves npx/npx.cmd on Windows too
+      expect(s).toContain("child.on('close', () => process.exit(0));");
     }
   });
 
   it('embeds the JWT only when provided', () => {
     expect(buildAmbientHook('SessionStart', 'i')).not.toContain('CACHLY_JWT');
-    expect(buildAmbientHook('SessionStart', 'i', 'cky_x')).toContain('CACHLY_JWT="cky_x"');
+    expect(buildAmbientHook('SessionStart', 'i', 'cky_x')).toContain("process.env.CACHLY_JWT = 'cky_x';");
   });
 
   it('script names carry the shared upgrade marker', () => {
@@ -76,6 +76,6 @@ describe('mergeAmbientSettings', () => {
     };
     const { settings } = mergeAmbientSettings(stale, paths);
     expect(settings.hooks!.UserPromptSubmit).toHaveLength(1);
-    expect(settings.hooks!.UserPromptSubmit[0].hooks[0].command).toBe(paths.UserPromptSubmit);
+    expect(settings.hooks!.UserPromptSubmit[0].hooks[0].command).toBe(`node "${paths.UserPromptSubmit}"`);
   });
 });

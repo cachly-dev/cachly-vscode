@@ -44,6 +44,7 @@ interface MemoryData {
   memory_used_pct: number;
   total_recall_count?: number;
   recall_limit?: number;
+  goodwill_message?: string;
   iq_boost_pct?: number;
   team_authors?: string[];
   crystal?: { summary: string; patterns_hit: number; created_at: string };
@@ -68,6 +69,7 @@ interface BrainHealth {
   teamAuthors: string[];
   crystal: { summary: string; patterns_hit: number; created_at: string } | null;
   pendingLessons: number; // locally queued offline, not yet synced
+  goodwillMessage: string | null;
   insights: BrainInsights | null;
 }
 
@@ -201,7 +203,6 @@ let clsLastEditTime = 0;
 
 let statusBarItem: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
-let recallTimer: NodeJS.Timeout | undefined;
 let lastHealth: BrainHealth | undefined;
 let brainPanel: vscode.WebviewPanel | undefined;
 let extensionContext: vscode.ExtensionContext;
@@ -454,12 +455,11 @@ export function activate(context: vscode.ExtensionContext) {
     }
   }
 
-  // Session recall on activation + hourly
-  triggerSessionRecall();
   // Visible "welcome back" briefing once per activation (the startup wow).
+  // Note: the extension must never POST /recall as a heartbeat — those pings
+  // used to inflate the recall counter every ROI metric is derived from.
+  // Recalls are only counted when an AI (or @cachly chat) actually reuses a lesson.
   void showStartupBriefing();
-  const ONE_HOUR = 60 * 60 * 1000;
-  recallTimer = setInterval(() => triggerSessionRecall(), ONE_HOUR);
 
   // Offline queue: try to sync immediately on activation, then every 5 min
   startSyncTimer();
@@ -577,20 +577,21 @@ async function updateStatusBar() {
       statusBarItem.backgroundColor = new vscode.ThemeColor('statusBarItem.errorBackground');
     } else {
       const icon = health.status === 'healthy' ? '$(brain)' : '$(warning)';
-      const recallLabel = health.recallLimit > 0
+      // Limited tiers report a monthly counter, unlimited tiers all-time —
+      // say which one, and never decorate the bar with fabricated derivatives.
+      const monthly = health.recallLimit > 0;
+      const recallLabel = monthly
         ? `${health.totalRecalls}/${health.recallLimit} recalls`
         : `${health.totalRecalls} recalls`;
       const tokenSuffix = health.estimatedTokensSaved >= 1000
         ? ` · ${fmtTokens(health.estimatedTokensSaved).replace(' tokens', ' tok')}`
         : '';
-      const iqSuffix = health.iqBoostPct > 0 ? ` · 📈${health.iqBoostPct.toFixed(0)}%` : '';
-      statusBarItem.text = `${icon} Brain: ${health.lessons} lessons · ${recallLabel}${tokenSuffix}${iqSuffix}`;
-      const savedHrs = (health.totalRecalls * 8 / 60).toFixed(1);
+      statusBarItem.text = `${icon} Brain: ${health.lessons} lessons · ${recallLabel}${tokenSuffix}`;
       statusBarItem.tooltip = new vscode.MarkdownString(
         `**🧠 Brain active — learning from your work**\n\n` +
         `- 📚 **${health.lessons}** lessons remembered\n` +
-        `- 🔁 **${health.totalRecalls}** recalls${health.recallLimit > 0 ? ` of ${health.recallLimit}` : ''} · ~${savedHrs}h saved\n` +
-        (health.estimatedTokensSaved >= 1000 ? `- 💰 ${fmtTokens(health.estimatedTokensSaved)} saved\n` : '') +
+        `- 🔁 **${health.totalRecalls}** recalls ${monthly ? `of ${health.recallLimit} this month` : 'all-time'}\n` +
+        (health.estimatedTokensSaved >= 1000 ? `- 💰 ${fmtTokens(health.estimatedTokensSaved)} saved (est. ~${TOKENS_PER_RECALL} tok per reused lesson)\n` : '') +
         (sessionInjections > 0 ? `- 🔬 Ambient recall (session): ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected\n` : '') +
         (health.status === 'degraded' ? `\n⚠️ _Degraded: brain is reachable but some features are slow._\n` : '') +
         `\n_Click to open Brain Health._`,
@@ -647,6 +648,7 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     memoryUsedBytes: 0, memoryLimitBytes: 0, memoryUsedPct: 0,
     iqBoostPct: 0, teamAuthors: [], crystal: null,
     pendingLessons: extensionContext?.globalState.get<OfflineLesson[]>(OFFLINE_QUEUE_KEY, []).length ?? 0,
+    goodwillMessage: null,
     insights: null,
   };
 
@@ -700,6 +702,7 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     result.totalRecalls = memData.total_recall_count
       ?? result.topLessons.reduce((s, l) => s + (l.recall_count ?? 0), 0);
     result.recallLimit = memData.recall_limit ?? -1;
+    result.goodwillMessage = memData.goodwill_message || null;
     result.estimatedTokensSaved = result.totalRecalls * TOKENS_PER_RECALL;
     result.estimatedCostSaved = result.estimatedTokensSaved * COST_PER_TOKEN;
     result.iqBoostPct = memData.iq_boost_pct ?? 0;
@@ -968,19 +971,6 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
   } catch (e) {
     log('Failed to register @cachly chat participant', (e as Error).message);
   }
-}
-
-// ── Session recall ────────────────────────────────────────────────────────────
-
-async function triggerSessionRecall() {
-  const config = vscode.workspace.getConfiguration('cachly');
-  const apiKey = config.get<string>('apiKey', '');
-  const instanceId = await getEffectiveInstanceId();
-  const baseUrl = apiBaseUrl(config);
-  if (!isValidApiKey(apiKey) || !instanceId) return;
-  try {
-    await apiPost(`${baseUrl}/api/v1/instances/${instanceId}/recall`, apiKey, { source: 'vscode' });
-  } catch { /* non-critical */ }
 }
 
 // ── Startup briefing: a visible "welcome back" the moment the editor opens ──────
@@ -1474,10 +1464,9 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
   // Mark onboarding done so the fallback wizard doesn't appear redundantly
   void context.globalState.update('onboardingShown', true);
 
-  // Restart refresh loop, flush offline lessons, trigger recall + framework detection
+  // Restart refresh loop, flush offline lessons + framework detection
   startRefreshLoop();
   void flushOfflineQueue();
-  triggerSessionRecall();
   detectAndSuggestFrameworks(context);
 
   return true;
@@ -2617,119 +2606,197 @@ function showInBrainWebview(title: string, html: string) {
     brainPanel = vscode.window.createWebviewPanel(
       'cachlyBrain', title,
       { viewColumn: vscode.ViewColumn.Beside, preserveFocus: true },
-      { enableScripts: false, retainContextWhenHidden: true },
+      // Scripts are CSP-locked to a per-render nonce (see wrapHtml) and only
+      // power local interactivity (filter box, toolbar postMessage) — the panel
+      // never loads remote code.
+      { enableScripts: true, retainContextWhenHidden: true },
     );
+    brainPanel.webview.onDidReceiveMessage((msg) => void handleBrainPanelMessage(msg));
     brainPanel.webview.html = wrapHtml(html);
     brainPanel.onDidDispose(() => { brainPanel = undefined; });
+  }
+}
+
+async function handleBrainPanelMessage(msg: { cmd?: string; text?: string } | undefined): Promise<void> {
+  try {
+    switch (msg?.cmd) {
+      case 'refresh':
+      case 'showHealth':
+        await showBrainHealthPanel();
+        break;
+      case 'showLessons':
+        await showLessonsPanel();
+        break;
+      case 'saveLesson':
+        await vscode.commands.executeCommand('cachly.saveLesson');
+        break;
+      case 'doctor':
+        await vscode.commands.executeCommand('cachly.diagnose');
+        break;
+      case 'openSettings':
+        await vscode.commands.executeCommand('workbench.action.openSettings', 'cachly');
+        break;
+      case 'upgrade':
+        await vscode.env.openExternal(vscode.Uri.parse('https://cachly.dev/billing'));
+        break;
+      case 'setAuthor': {
+        const current = vscode.workspace.getConfiguration('cachly').get<string>('authorName') ?? '';
+        const name = await vscode.window.showInputBox({
+          prompt: 'Your name or handle — lessons you save are attributed to it (Team Brain)',
+          placeHolder: 'e.g. heinrich',
+          value: current,
+        });
+        if (name !== undefined) {
+          await vscode.workspace.getConfiguration('cachly')
+            .update('authorName', name.trim(), vscode.ConfigurationTarget.Global);
+          await showBrainHealthPanel();
+        }
+        break;
+      }
+      case 'copy':
+        if (msg.text) {
+          await vscode.env.clipboard.writeText(msg.text);
+          vscode.window.setStatusBarMessage('🧠 Copied to clipboard', 2000);
+        }
+        break;
+    }
+  } catch (e) {
+    log('brain panel message failed', (e as Error).message);
   }
 }
 
 // ── HTML builders ─────────────────────────────────────────────────────────────
 
 function esc(s: string): string {
-  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
 function buildHealthHtml(health: BrainHealth): string {
-  const statusIcon = health.status === 'healthy' ? '✅ Healthy'
+  const statusLabel = health.status === 'healthy' ? '✅ Healthy'
     : health.status === 'empty' ? '🌱 Ready (no lessons yet)'
     : health.status === 'setup_needed' ? '🔐 Re-auth needed'
     : health.status === 'degraded' ? '⚠️ Degraded' : '❌ Unreachable';
-  const tokensSaved = fmtTokens(health.estimatedTokensSaved);
-  const usedMB = (health.memoryUsedBytes / (1024 * 1024)).toFixed(2);
+
+  // Limited tiers report a MONTHLY recall counter (resets each month);
+  // unlimited tiers report the all-time total. Label accordingly — mixing the
+  // two up is exactly what made the old "15450/500" display meaningless.
+  const monthly = health.recallLimit > 0;
+  const scopeLabel = monthly ? 'this month' : 'all-time';
+  const recallPct = monthly ? (health.totalRecalls / health.recallLimit) * 100 : 0;
+  const overLimit = monthly && health.totalRecalls >= health.recallLimit;
+
+  const usedMB = (health.memoryUsedBytes / (1024 * 1024)).toFixed(1);
   const limitMB = (health.memoryLimitBytes / (1024 * 1024)).toFixed(0);
-  const pct = health.memoryUsedPct.toFixed(1);
 
-  // Recall progress bar (hero metric)
-  const recallLimitLabel = health.recallLimit > 0 ? `${health.recallLimit.toLocaleString()}` : '∞';
-  const recallPct = health.recallLimit > 0
-    ? Math.min(health.totalRecalls / health.recallLimit * 100, 100)
-    : 0;
-  const recallFilled = health.recallLimit > 0 ? Math.round(recallPct / 100 * 20) : 0;
-  const recallBar = '█'.repeat(recallFilled) + '░'.repeat(20 - recallFilled);
-  const recallBarColor = recallPct >= 90 ? 'color:#f87171' : recallPct >= 70 ? 'color:#fb923c' : 'color:#a78bfa';
+  const meter = (pct: number, danger = false) =>
+    `<div class="meter${danger ? ' danger' : ''}"><span style="width:${Math.round(Math.min(pct, 100))}%"></span></div>`;
 
-  // Storage bar (secondary)
-  const storageFilled = Math.round(health.memoryUsedPct / 100 * 20);
-  const storageBar = '█'.repeat(storageFilled) + '░'.repeat(20 - storageFilled);
+  const toolbar = `
+    <div class="toolbar">
+      <button data-cmd="refresh" title="Re-fetch Brain data">⟳ Refresh</button>
+      <button data-cmd="showLessons" title="Browse all lessons">📖 Lessons</button>
+      <button data-cmd="saveLesson" title="Save a lesson manually">＋ Save lesson</button>
+      <button data-cmd="doctor" title="Run connection diagnostics">🩺 Doctor</button>
+      <button data-cmd="openSettings" title="Open cachly settings">⚙ Settings</button>
+      <span class="updated">updated ${new Date().toLocaleTimeString()}</span>
+    </div>`;
 
-  const offlineBanner = health.status === 'unreachable'
-    ? `<p style="opacity:.55;font-size:.95em"><s>🧠</s> offline — cannot reach the Cachly API. Check your API key, instance ID, and network.</p>`
-    : '';
+  const banners: string[] = [];
+  if (health.status === 'unreachable') {
+    banners.push(`<div class="banner error">🧠 <strong>Offline</strong> — cannot reach the Cachly API. Check your API key, instance ID, and network. <button class="mini" data-cmd="doctor">Run Brain Doctor</button></div>`);
+  }
+  if (health.pendingLessons > 0) {
+    banners.push(`<div class="banner warn">⏳ <strong>${health.pendingLessons} lesson${health.pendingLessons === 1 ? '' : 's'} saved offline</strong> — not yet counted below. They sync automatically once the Brain is reachable.</div>`);
+  }
+  if (health.goodwillMessage) {
+    banners.push(`<div class="banner info">${esc(health.goodwillMessage)}</div>`);
+  }
+  if (overLimit) {
+    banners.push(`<div class="banner error">🚦 <strong>Monthly recall limit reached</strong> (${health.totalRecalls.toLocaleString()} of ${health.recallLimit.toLocaleString()}). Recalls may be throttled until next month. <button class="mini" data-cmd="upgrade">Upgrade for unlimited</button></div>`);
+  } else if (monthly && recallPct >= 80) {
+    banners.push(`<div class="banner warn">🚀 <strong>${recallPct.toFixed(0)}% of your monthly recall limit used.</strong> <button class="mini" data-cmd="upgrade">Upgrade for unlimited</button></div>`);
+  }
 
-  const pendingBanner = health.pendingLessons > 0
-    ? `<div style="margin:10px 0;padding:10px 14px;background:rgba(251,191,36,.12);border-left:3px solid #fbbf24;border-radius:4px">
-        ⏳ <strong>${health.pendingLessons} lesson${health.pendingLessons === 1 ? '' : 's'} saved offline</strong> — not yet counted above.
-        They will sync automatically once the Brain is reachable.
-       </div>`
-    : '';
+  const cards = `
+    <div class="cards">
+      <div class="card">
+        <div class="card-label">Lessons</div>
+        <div class="card-value">${health.lessons.toLocaleString()}</div>
+        <div class="card-sub">${health.topics.length} topic${health.topics.length === 1 ? '' : 's'} · ${health.contexts} context entr${health.contexts === 1 ? 'y' : 'ies'}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Recalls ${scopeLabel}</div>
+        <div class="card-value${overLimit ? ' over' : ''}">${health.totalRecalls.toLocaleString()}${monthly ? `<span class="of"> / ${health.recallLimit.toLocaleString()}</span>` : ''}</div>
+        ${monthly ? meter(recallPct, recallPct >= 90) : ''}
+        <div class="card-sub">${monthly
+          ? (overLimit ? 'monthly limit reached' : `${recallPct.toFixed(0)}% of the ${esc(health.tier)} monthly limit`)
+          : 'unlimited plan — counter never resets'}</div>
+      </div>
+      <div class="card">
+        <div class="card-label">Est. tokens saved ${scopeLabel}</div>
+        <div class="card-value">${fmtTokens(health.estimatedTokensSaved).replace('~', '')}</div>
+        <div class="card-sub">estimate: ~${TOKENS_PER_RECALL.toLocaleString()} tokens per reused lesson</div>
+      </div>
+      ${health.memoryLimitBytes > 0 ? `
+      <div class="card">
+        <div class="card-label">Storage</div>
+        <div class="card-value">${usedMB}<span class="of"> / ${limitMB} MB</span></div>
+        ${meter(health.memoryUsedPct, health.memoryUsedPct >= 90)}
+        <div class="card-sub">${health.memoryUsedPct.toFixed(1)}% used</div>
+      </div>` : ''}
+    </div>`;
 
-  // Upgrade nudge when ≥80% of recall limit used
-  const upgradeBanner = (health.recallLimit > 0 && recallPct >= 80)
-    ? `<div style="margin:12px 0;padding:10px 14px;background:rgba(251,146,60,.12);border-left:3px solid #fb923c;border-radius:4px">
-        🚀 <strong>${recallPct.toFixed(0)}% of recall limit used.</strong>
-        Upgrade to unlock unlimited recalls and keep your AI running at full speed.
-        <a href="https://cachly.dev/billing" style="color:#fb923c">Upgrade →</a>
-       </div>`
-    : '';
+  const metaLine = `<p class="meta">${statusLabel} · Tier <strong>${esc(health.tier)}</strong>${
+    health.lastSession ? ` · Last session: <em>${esc(health.lastSession.slice(0, 110))}${health.lastSession.length > 110 ? '…' : ''}</em>` : ''}</p>`;
 
-  const topicRows = health.topics.map(t => `<li><code>${esc(t)}</code></li>`).join('');
-  const lessonRows = health.topLessons.map(l => {
-    const icon = l.outcome === 'success' ? '✅' : l.outcome === 'failure' ? '❌' : '⚠️';
-    const sev = l.severity === 'critical' ? '🔴' : l.severity === 'major' ? '🟠' : '🟡';
-    const worked = esc(l.what_worked.slice(0, 70)) + (l.what_worked.length > 70 ? '…' : '');
-    return `<tr><td><code>${esc(l.topic)}</code></td><td>${icon}</td><td>${l.recall_count}</td><td>${sev} ${esc(l.severity ?? '-')}</td><td>${worked}</td></tr>`;
-  }).join('');
+  // ── Value estimate — every number here is a labeled heuristic, never
+  // presented as measured fact (the fastest way to lose user trust is a
+  // "€3,300 saved" line that can't survive one skeptical question). ──
+  let roiSection = '';
+  if (health.insights) {
+    const ins = health.insights;
+    const rows: string[] = [];
+    if (ins.minutes_saved > 0) {
+      rows.push(`<tr><td>Developer time saved</td><td><strong>${fmtDuration(ins.minutes_saved * 60)}</strong></td><td class="hint">heuristic: 30–240 min per reused lesson, weighted by severity</td></tr>`);
+    }
+    if (ins.dollars_saved > 0) {
+      rows.push(`<tr><td>Cost saved</td><td><strong>${fmtMoney(ins.dollars_saved, ins.currency)}</strong></td><td class="hint">at ${fmtMoney(ins.hourly_rate, ins.currency)}/h — adjust your rate at cachly.dev/team</td></tr>`);
+    }
+    if (ins.ttfr_p50_sec > 0) {
+      rows.push(`<tr><td>Time to first payoff</td><td><strong>${fmtDuration(ins.ttfr_p50_sec)}</strong></td><td class="hint">from Brain creation until a saved lesson was first reused</td></tr>`);
+    }
+    if (rows.length > 0) {
+      roiSection = `<h2>💰 Value estimate</h2>
+        <p class="hint">Estimates derived from recall activity — not measured billing data.</p>
+        <table>${rows.join('')}</table>`;
+    }
+  }
 
-  const recallLimitRow = health.recallLimit > 0
-    ? `<tr><td>Recall Limit</td><td>${health.recallLimit.toLocaleString()} / month <em style="opacity:.6">(upgrade for unlimited)</em></td></tr>`
-    : `<tr><td>Recall Limit</td><td>Unlimited ✨</td></tr>`;
-
-  const iqBoostRow = health.iqBoostPct > 0
-    ? `<tr><td>📈 IQ Boost</td><td><strong>${health.iqBoostPct.toFixed(0)}%</strong> <em style="opacity:.6">(ratio of tasks handled via Brain vs cold-start)</em></td></tr>`
-    : '';
-
+  // ── Team Brain — honest solo state. A solo Brain mathematically cannot have
+  // cross-author reuse, so showing "0.0%" reads as failure when it isn't. ──
   const configuredAuthor = (vscode.workspace.getConfiguration('cachly').get<string>('authorName') ?? '').trim();
-  const teamReuseLine = health.insights
-    ? `<p style="opacity:.82;font-size:.9em"><strong>Knowledge reuse:</strong> ${health.insights.reuse_pct.toFixed(1)}% <em style="opacity:.65">of recalls cross-author</em></p>`
-    : '';
-  const teamSection = health.teamAuthors.length >= 1
-    ? `<h2>👥 Team Brain Contributors (${health.teamAuthors.length})</h2>
-       ${teamReuseLine}
-       <p>${health.teamAuthors.map(a => `<code>${esc(a)}</code>`).join(' · ')}</p>
-       ${!configuredAuthor ? `<p style="opacity:.7;font-size:.9em">💡 <strong>Set your name</strong> so your lessons show up here: <em>VS Code Settings → <code>cachly.authorName</code></em></p>` : ''}
-       <p style="opacity:.7;font-size:.9em">To invite teammates: have them install the <strong>Cachly Brain</strong> extension and use the same Cachly instance ID and API key.</p>`
-    : !configuredAuthor
-      ? `<h2>👥 Team Brain</h2>${teamReuseLine}<p style="opacity:.7;font-size:.9em">No team lessons yet. <strong>Set your name</strong> to start attributing lessons: <em>VS Code Settings → <code>cachly.authorName</code></em></p>`
-      : health.insights
-        ? `<h2>👥 Team Brain</h2>${teamReuseLine}`
-        : '';
+  let teamSection: string;
+  if (health.teamAuthors.length >= 2) {
+    const reusePct = health.insights?.reuse_pct ?? 0;
+    const reuseLine = reusePct > 0
+      ? `<p><strong>Knowledge reuse:</strong> ${reusePct.toFixed(1)}% of recalls reused a teammate's lesson</p>`
+      : `<p class="hint">No cross-author recalls yet — this fills up once teammates recall each other's lessons.</p>`;
+    teamSection = `<h2>👥 Team Brain <span class="count">(${health.teamAuthors.length} contributors)</span></h2>
+      ${reuseLine}
+      <p>${health.teamAuthors.map(a => `<code>${esc(a)}</code>`).join(' · ')}</p>
+      ${!configuredAuthor ? `<p><button class="mini" data-cmd="setAuthor">Set your author name</button> <span class="hint">so your lessons are attributed to you</span></p>` : ''}`;
+  } else {
+    teamSection = `<h2>👥 Team Brain</h2>
+      <p class="hint">Solo Brain — ${configuredAuthor
+        ? `lessons are attributed to <code>${esc(configuredAuthor)}</code>`
+        : 'lessons are currently unattributed'}. Cross-author metrics appear once a teammate uses this instance.</p>
+      ${!configuredAuthor ? `<p><button class="mini" data-cmd="setAuthor">Set your author name</button></p>` : ''}
+      <p class="hint">Invite a teammate: same instance ID + API key in their editor — their AI instantly knows everything this Brain knows.</p>`;
+  }
 
   const crystalSection = health.crystal
-    ? `<h2>💎 Memory Crystal</h2><blockquote>${esc(health.crystal.summary)}</blockquote><p style="opacity:.6;font-size:.9em">Generated ${esc(health.crystal.created_at)} · ${health.crystal.patterns_hit} patterns</p>`
+    ? `<h2>💎 Memory Crystal</h2><blockquote>${esc(health.crystal.summary)}</blockquote><p class="hint">Generated ${esc(health.crystal.created_at)} · ${health.crystal.patterns_hit} patterns</p>`
     : '';
-
-  const insightsSection = health.insights
-    ? (() => {
-        const ins = health.insights!;
-        const mins = ins.minutes_saved.toFixed(0);
-        const dollars = fmtMoney(ins.dollars_saved, ins.currency);
-        const hourlyRate = fmtMoney(ins.hourly_rate, ins.currency);
-        const ttfr = fmtDuration(ins.ttfr_p50_sec);
-        return `<h2>💰 Brain ROI</h2>
-          <table>
-            <tr><td>Developer time saved</td><td><strong>${mins} min</strong></td></tr>
-            <tr><td>Estimated cost saved</td><td><strong>${dollars}</strong> <em style="opacity:.6">at ${hourlyRate}/h</em></td></tr>
-            <tr><td>Time-to-first-recall (p50)</td><td>${ttfr}</td></tr>
-          </table>`;
-      })()
-    : '';
-  const lessonPrimer = `<blockquote>
-      💡 <strong>How lessons work:</strong> AI assistants call <code>learn_from_attempts</code> after fixing bugs.
-      Each <code>recall_best_solution</code> saves ~1,200 tokens. Your brain currently has <strong>${health.lessons} saved solutions</strong>.
-      <br/><br/>
-      <strong>Ambient Learning:</strong> Cachly watches for repeated typing patterns and <em>asks</em> whether to save them as a Brain lesson — never saves automatically.
-    </blockquote>`;
 
   // Ambient recall net-token accounting (§6.2 "measure net, not gross"). Net =
   // est. tokens the surfaced lessons save (~TOKENS_PER_RECALL each, the same
@@ -2740,118 +2807,199 @@ function buildHealthHtml(health: BrainHealth): string {
   const ambientSavedEst = ambientInjectionsTotal * TOKENS_PER_RECALL;
   const ambientNet = ambientSavedEst - ambientInjectedTotal;
   const ambientSection = ambientInjectionsTotal > 0
-    ? `<h2>🔬 Ambient Recall — Net Token Impact</h2>
+    ? `<h2>🔬 Ambient Recall — net token impact</h2>
        <table>
-         <tr><td>Lessons surfaced (@cachly)</td><td><strong>${ambientInjectionsTotal.toLocaleString()}</strong></td></tr>
-         <tr><td>Tokens injected (gross cost)</td><td>${fmtTokens(ambientInjectedTotal)}</td></tr>
-         <tr><td>Est. tokens saved</td><td>${fmtTokens(ambientSavedEst)} <em style="opacity:.6">(~${TOKENS_PER_RECALL}/lesson)</em></td></tr>
-         <tr><td><strong>Net</strong></td><td><strong style="color:${ambientNet >= 0 ? '#4ade80' : '#f87171'}">${ambientNet >= 0 ? '+' : '−'}${fmtTokens(Math.abs(ambientNet)).replace('~', '')}</strong></td></tr>
+         <tr><td>Lessons surfaced (@cachly)</td><td><strong>${ambientInjectionsTotal.toLocaleString()}</strong></td><td></td></tr>
+         <tr><td>Tokens injected (gross cost)</td><td>${fmtTokens(ambientInjectedTotal)}</td><td></td></tr>
+         <tr><td>Est. tokens saved</td><td>${fmtTokens(ambientSavedEst)}</td><td class="hint">~${TOKENS_PER_RECALL}/lesson</td></tr>
+         <tr><td><strong>Net</strong></td><td><strong class="${ambientNet >= 0 ? 'pos' : 'neg'}">${ambientNet >= 0 ? '+' : '−'}${fmtTokens(Math.abs(ambientNet)).replace('~', '')}</strong></td><td></td></tr>
        </table>
-       <p style="opacity:.7;font-size:.85em;margin-top:-6px">This session: ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected. Honest accounting — we show the injected cost, not just the savings.</p>`
+       <p class="hint">This session: ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected. Honest accounting — the injected cost is shown, not just the savings.</p>`
     : '';
 
+  // ── Lessons — searchable, copyable. data-lesson carries the lowercase
+  // search key; the filter script in wrapHtml toggles row visibility. ──
+  let lessonsSection: string;
+  if (health.topLessons.length > 0) {
+    const lessonRows = health.topLessons.map(l => {
+      const icon = l.outcome === 'success' ? '✅' : l.outcome === 'failure' ? '❌' : '⚠️';
+      const sev = l.severity === 'critical' ? '🔴 critical' : l.severity === 'major' ? '🟠 major' : '🟡 minor';
+      const worked = esc(l.what_worked.slice(0, 90)) + (l.what_worked.length > 90 ? '…' : '');
+      const date = l.ts ? new Date(l.ts).toLocaleDateString() : '—';
+      const searchKey = esc(`${l.topic} ${l.what_worked} ${l.author ?? ''} ${l.severity ?? ''}`.toLowerCase());
+      return `<tr data-lesson="${searchKey}">
+        <td><code>${esc(l.topic)}</code></td><td>${icon}</td><td class="num">${l.recall_count}</td>
+        <td>${sev}</td><td>${worked}</td><td>${l.author ? esc(l.author) : '<span class="hint">—</span>'}</td><td>${date}</td>
+        <td><button class="mini" data-cmd="copy" data-text="${esc(l.what_worked)}" title="Copy full lesson text">⧉</button></td>
+      </tr>`;
+    }).join('');
+    lessonsSection = `
+      <h2>🏆 Lessons <span class="count">(top ${health.topLessons.length} of ${health.lessons})</span></h2>
+      <input id="lesson-filter" type="text" placeholder="Filter lessons — topic, text, author, severity…" />
+      <table class="lessons">
+        <tr><th>Topic</th><th></th><th>Recalls</th><th>Severity</th><th>What worked</th><th>Author</th><th>Learned</th><th></th></tr>
+        ${lessonRows}
+      </table>
+      <p id="filter-empty" class="hint" style="display:none">No lessons match your filter.</p>
+      ${health.lessons > health.topLessons.length ? `<p class="hint">Showing the ${health.topLessons.length} most-recalled lessons. <button class="mini" data-cmd="showLessons">Browse all</button></p>` : ''}`;
+  } else {
+    lessonsSection = `<h2>🏆 Lessons</h2>
+      <p class="hint">No lessons yet. Your AI saves one automatically after each fix (<code>learn_from_attempts</code> via MCP), or save one yourself:</p>
+      <p><button data-cmd="saveLesson">＋ Save your first lesson</button></p>`;
+  }
+
+  const primer = `<details>
+      <summary>💡 How this works</summary>
+      <blockquote>
+        <strong>Lessons:</strong> AI assistants call <code>learn_from_attempts</code> after fixing bugs; recalls happen when a saved lesson is actually reused (<code>recall_best_solution</code>, <code>smart_recall</code>, or <code>@cachly</code> chat) — passive IDE activity is never counted.
+        <br/><br/>
+        <strong>Ambient Learning:</strong> Cachly watches for repeated typing patterns and <em>asks</em> whether to save them as a Brain lesson — never saves automatically.
+      </blockquote>
+    </details>`;
+
   return `
-    ${offlineBanner}
-    ${pendingBanner}
-    <h1>🧠 Cachly Brain Health</h1>
-
-    ${upgradeBanner}
-    ${insightsSection}
-    ${lessonPrimer}
-
-    <h2>⚡ Recall Activity</h2>
-    <p style="font-size:1.1em">
-      <span style="${recallBarColor}" class="bar">${recallBar}</span>
-      &nbsp;<strong>${health.totalRecalls.toLocaleString()}</strong> / ${recallLimitLabel} recalls
-      ${health.recallLimit > 0 ? `<span style="opacity:.6">(${recallPct.toFixed(1)}%)</span>` : ''}
-    </p>
-    <p style="opacity:.7;font-size:.9em;margin-top:-8px">Each recall = your AI reused a saved lesson instead of re-researching → ${tokensSaved} saved so far</p>
-
+    ${toolbar}
+    <h1>🧠 Cachly Brain</h1>
+    ${metaLine}
+    ${banners.join('\n')}
+    ${cards}
+    ${roiSection}
     ${ambientSection}
-
-    <table>
-      <tr><th>Metric</th><th>Value</th></tr>
-      <tr><td>Status</td><td>${statusIcon}</td></tr>
-      <tr><td>Tier</td><td>${esc(health.tier)}</td></tr>
-      <tr><td>Lessons Learned</td><td><strong>${health.lessons}</strong>${health.pendingLessons > 0 ? ` <em style="opacity:.6">+ ${health.pendingLessons} pending sync</em>` : ''}</td></tr>
-      <tr><td>Context Entries</td><td>${health.contexts > 0 ? health.contexts : '<span style="opacity:.5">0 — use <code>remember_context</code> to store WIP context</span>'}</td></tr>
-      <tr><td>Total Recalls</td><td><strong>${health.totalRecalls.toLocaleString()}</strong></td></tr>
-      ${recallLimitRow}
-      ${iqBoostRow}
-      <tr><td>Tokens Saved</td><td>${tokensSaved}</td></tr>
-      ${health.memoryLimitBytes > 0 ? `<tr><td>Storage</td><td><span class="bar">${storageBar}</span> ${usedMB} MB / ${limitMB} MB (${pct}%)</td></tr>` : ''}
-      ${health.lastSession ? `<tr><td>Last Session</td><td>${esc(health.lastSession)}</td></tr>` : ''}
-    </table>
-
-    <h2>📚 Topics (${health.topics.length})</h2>
-    <ul>${topicRows}</ul>
-
-    <h2>🏆 Top Lessons</h2>
-    <table>
-      <tr><th>Topic</th><th>Outcome</th><th>Recalls</th><th>Severity</th><th>What Worked</th></tr>
-      ${lessonRows}
-    </table>
-
+    ${lessonsSection}
     ${teamSection}
     ${crystalSection}
+    ${primer}
   `;
 }
 
 function buildLessonsHtml(health: BrainHealth): string {
-  const tokensSaved = fmtTokens(health.estimatedTokensSaved);
+  const scopeLabel = health.recallLimit > 0 ? 'recalls this month' : 'recalls';
   const rows = health.topLessons.map(l => {
     const icon = l.outcome === 'success' ? '✅' : l.outcome === 'failure' ? '❌' : '⚠️';
     const date = l.ts ? new Date(l.ts).toLocaleDateString() : 'unknown';
+    const searchKey = esc(`${l.topic} ${l.what_worked} ${l.author ?? ''} ${l.severity ?? ''}`.toLowerCase());
     return `
-      <div class="lesson">
-        <h2>${icon} <code>${esc(l.topic)}</code></h2>
-        <ul>
-          <li><strong>Severity:</strong> ${esc(l.severity ?? 'minor')}</li>
-          <li><strong>Recalled:</strong> ${l.recall_count} time${l.recall_count !== 1 ? 's' : ''}</li>
-          <li><strong>Learned:</strong> ${date}</li>
-          <li><strong>What worked:</strong> ${esc(l.what_worked)}</li>
-        </ul>
+      <div class="lesson" data-lesson="${searchKey}">
+        <h2>${icon} <code>${esc(l.topic)}</code>
+          <button class="mini" data-cmd="copy" data-text="${esc(l.what_worked)}" title="Copy lesson text">⧉ copy</button>
+        </h2>
+        <p class="hint">${esc(l.severity ?? 'minor')} · recalled ${l.recall_count} time${l.recall_count !== 1 ? 's' : ''} · learned ${date}${l.author ? ` · by ${esc(l.author)}` : ''}</p>
+        <p>${esc(l.what_worked)}</p>
       </div>`;
   }).join('');
 
+  const truncationNote = health.lessons > health.topLessons.length
+    ? `<p class="hint">Showing the ${health.topLessons.length} most-recalled of ${health.lessons} lessons. The full archive is available via <code>brain_search</code> / <code>smart_recall</code> in your AI, or at cachly.dev.</p>`
+    : '';
+
   return `
-    <h1>📖 Cachly Brain — All Lessons</h1>
-    <p>${health.lessons} lessons · ${health.totalRecalls.toLocaleString()} recalls · ${tokensSaved} saved</p>
+    <div class="toolbar">
+      <button data-cmd="showHealth">🧠 Brain Health</button>
+      <button data-cmd="refresh">⟳ Refresh</button>
+      <button data-cmd="saveLesson">＋ Save lesson</button>
+      <span class="updated">updated ${new Date().toLocaleTimeString()}</span>
+    </div>
+    <h1>📖 Lessons</h1>
+    <p class="meta">${health.lessons} lessons · ${health.totalRecalls.toLocaleString()} ${scopeLabel}</p>
+    <input id="lesson-filter" type="text" placeholder="Filter lessons — topic, text, author, severity…" />
     ${rows}
+    <p id="filter-empty" class="hint" style="display:none">No lessons match your filter.</p>
+    ${truncationNote}
     <hr/>
     <blockquote>
       💡 Lessons are created when an AI assistant calls <code>learn_from_attempts()</code> via the Cachly MCP server,
-      or when you save one manually via <em>Cachly: Save Lesson</em>.
-      Each recall saves ~1,200 tokens by reusing known solutions.
+      or when you save one manually via <em>＋ Save lesson</em>.
     </blockquote>
   `;
 }
 
 function wrapHtml(body: string): string {
+  // Per-render nonce: the CSP only executes the inline script below — the
+  // panel can never load or run remote code.
+  const nonce = Math.random().toString(36).slice(2) + Date.now().toString(36);
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8"/>
   <meta name="viewport" content="width=device-width,initial-scale=1.0"/>
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline';">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src 'nonce-${nonce}';">
   <style>
-    body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); background: var(--vscode-editor-background); padding: 20px 32px; max-width: 900px; }
-    h1 { font-size: 1.5em; margin-bottom: 12px; }
-    h2 { font-size: 1.1em; margin-top: 24px; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 4px; }
+    body { font-family: var(--vscode-font-family); font-size: var(--vscode-font-size); color: var(--vscode-foreground); background: var(--vscode-editor-background); padding: 16px 28px 28px; max-width: 960px; }
+    h1 { font-size: 1.45em; margin: 10px 0 2px; }
+    h2 { font-size: 1.05em; margin-top: 26px; border-bottom: 1px solid var(--vscode-panel-border); padding-bottom: 4px; }
     table { border-collapse: collapse; width: 100%; margin: 12px 0; }
-    td, th { padding: 6px 12px; border: 1px solid var(--vscode-panel-border); text-align: left; }
+    td, th { padding: 6px 12px; border: 1px solid var(--vscode-panel-border); text-align: left; vertical-align: top; }
     th { background: var(--vscode-editor-inactiveSelectionBackground); font-weight: 600; }
     tr:nth-child(even) td { background: var(--vscode-list-hoverBackground); }
+    td.num { text-align: right; font-variant-numeric: tabular-nums; }
     code { background: var(--vscode-textCodeBlock-background); padding: 1px 5px; border-radius: 3px; font-family: var(--vscode-editor-font-family); font-size: 0.9em; }
     ul { padding-left: 20px; }
     li { margin: 3px 0; }
-    .bar { font-family: monospace; letter-spacing: 1px; }
-    .lesson { margin-bottom: 20px; }
     hr { border: none; border-top: 1px solid var(--vscode-panel-border); margin: 20px 0; }
     blockquote { border-left: 3px solid var(--vscode-activityBarBadge-background); padding: 8px 16px; color: var(--vscode-descriptionForeground); margin: 0; background: var(--vscode-textBlockQuote-background); }
+    details { margin-top: 24px; }
+    details summary { cursor: pointer; color: var(--vscode-descriptionForeground); }
+
+    .hint { color: var(--vscode-descriptionForeground); font-size: 0.9em; }
+    .meta { color: var(--vscode-descriptionForeground); margin-top: 0; }
+    .count { font-weight: 400; color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+    .pos { color: var(--vscode-charts-green, #4ade80); }
+    .neg { color: var(--vscode-charts-red, #f87171); }
+
+    .toolbar { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; position: sticky; top: 0; background: var(--vscode-editor-background); padding: 6px 0; z-index: 2; }
+    .toolbar .updated { margin-left: auto; color: var(--vscode-descriptionForeground); font-size: 0.85em; }
+    button { background: var(--vscode-button-secondaryBackground, var(--vscode-button-background)); color: var(--vscode-button-secondaryForeground, var(--vscode-button-foreground)); border: 1px solid var(--vscode-panel-border); border-radius: 4px; padding: 4px 10px; cursor: pointer; font-family: inherit; font-size: 0.9em; }
+    button:hover { background: var(--vscode-button-secondaryHoverBackground, var(--vscode-button-hoverBackground)); }
+    button.mini { padding: 1px 7px; font-size: 0.85em; }
+
+    .banner { margin: 10px 0; padding: 10px 14px; border-radius: 4px; border-left: 3px solid var(--vscode-panel-border); background: var(--vscode-textBlockQuote-background); }
+    .banner.warn { border-left-color: var(--vscode-editorWarning-foreground, #fbbf24); }
+    .banner.error { border-left-color: var(--vscode-editorError-foreground, #f87171); }
+    .banner.info { border-left-color: var(--vscode-charts-blue, #60a5fa); }
+
+    .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 10px; margin: 14px 0; }
+    .card { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 12px 14px; background: var(--vscode-editorWidget-background, transparent); }
+    .card-label { font-size: 0.8em; text-transform: uppercase; letter-spacing: 0.04em; color: var(--vscode-descriptionForeground); }
+    .card-value { font-size: 1.6em; font-weight: 600; margin: 2px 0; font-variant-numeric: tabular-nums; }
+    .card-value.over { color: var(--vscode-editorError-foreground, #f87171); }
+    .card-value .of { font-size: 0.6em; font-weight: 400; color: var(--vscode-descriptionForeground); }
+    .card-sub { font-size: 0.82em; color: var(--vscode-descriptionForeground); }
+    .meter { height: 5px; border-radius: 3px; background: var(--vscode-editorWidget-border, rgba(128,128,128,.25)); margin: 6px 0 4px; overflow: hidden; }
+    .meter span { display: block; height: 100%; background: var(--vscode-progressBar-background, #a78bfa); }
+    .meter.danger span { background: var(--vscode-editorError-foreground, #f87171); }
+
+    #lesson-filter { width: 100%; box-sizing: border-box; margin: 8px 0; padding: 6px 10px; border: 1px solid var(--vscode-input-border, var(--vscode-panel-border)); border-radius: 4px; background: var(--vscode-input-background); color: var(--vscode-input-foreground); font-family: inherit; }
+    #lesson-filter:focus { outline: 1px solid var(--vscode-focusBorder); }
+    .lesson { margin-bottom: 18px; }
+    .lesson h2 { border: none; margin: 0 0 2px; }
   </style>
 </head>
-<body>${body}</body>
+<body>${body}
+<script nonce="${nonce}">
+  (function () {
+    const vscodeApi = acquireVsCodeApi();
+    document.addEventListener('click', function (e) {
+      const el = e.target && e.target.closest ? e.target.closest('[data-cmd]') : null;
+      if (!el) return;
+      vscodeApi.postMessage({ cmd: el.getAttribute('data-cmd'), text: el.getAttribute('data-text') || undefined });
+    });
+    const filter = document.getElementById('lesson-filter');
+    if (filter) {
+      filter.addEventListener('input', function () {
+        const q = filter.value.toLowerCase().trim();
+        let visible = 0;
+        document.querySelectorAll('[data-lesson]').forEach(function (row) {
+          const show = !q || (row.getAttribute('data-lesson') || '').indexOf(q) !== -1;
+          row.style.display = show ? '' : 'none';
+          if (show) visible++;
+        });
+        const empty = document.getElementById('filter-empty');
+        if (empty) empty.style.display = visible === 0 ? '' : 'none';
+      });
+    }
+  })();
+</script>
+</body>
 </html>`;
 }
 
@@ -3082,7 +3230,6 @@ async function showSessionSummary(): Promise<void> {
 
 export function deactivate() {
   if (refreshTimer) clearInterval(refreshTimer);
-  if (recallTimer) clearInterval(recallTimer);
   if (syncTimer) clearInterval(syncTimer);
   if (ambientDebounce) clearTimeout(ambientDebounce);
   brainPanel?.dispose();

@@ -11,8 +11,13 @@
 // The scripts are graceful by construction: any failure exits 0 with no output,
 // so a broken hook can never block the user's agent.
 
-/** Bumped whenever a hook script changes so installers can upgrade old hooks. */
-export const AMBIENT_HOOK_VERSION = 'v2';
+/**
+ * Bumped whenever a hook script changes so installers can upgrade old hooks.
+ * v3: hooks became Node scripts (.mjs) invoked as `node "<path>"` — the
+ * cross-platform shape from the Claude Code hooks guide. The v1/v2 POSIX shell
+ * scripts silently never ran on native Windows (no /bin/sh).
+ */
+export const AMBIENT_HOOK_VERSION = 'v3';
 
 export const AMBIENT_CLI_SUBCOMMAND = 'ambient-recall';
 
@@ -22,26 +27,38 @@ const DEFAULT_CLI = `npx @cachly-dev/mcp-server@latest ${AMBIENT_CLI_SUBCOMMAND}
 
 /** Script filename per event — shared marker `cachly-ambient-` drives upgrades. */
 export const AMBIENT_SCRIPT_NAMES: Record<AmbientHookEvent, string> = {
-  SessionStart: 'cachly-ambient-session-start.sh',
-  UserPromptSubmit: 'cachly-ambient-prompt-submit.sh',
-  PreToolUse: 'cachly-ambient-pre-tool.sh',
-  Stop: 'cachly-ambient-stop.sh',
+  SessionStart: 'cachly-ambient-session-start.mjs',
+  UserPromptSubmit: 'cachly-ambient-prompt-submit.mjs',
+  PreToolUse: 'cachly-ambient-pre-tool.mjs',
+  Stop: 'cachly-ambient-stop.mjs',
 };
 export const AMBIENT_SCRIPT_MARKER = '.claude/hooks/cachly-ambient-';
 
+/** Escape a value for embedding inside a single-quoted JS string literal. */
+function jsString(s: string): string {
+  return s.replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+}
+
 export function buildAmbientHook(event: AmbientHookEvent, instanceId: string, apiKey?: string): string {
   return [
-    `#!/bin/sh`,
-    `# cachly Ambient Recall — ${event} ${AMBIENT_HOOK_VERSION}`,
-    `# Pushes relevant memory into context automatically. Never blocks the agent:`,
-    `# any failure exits 0 with no output (graceful degrade).`,
-    `export CACHLY_BRAIN_INSTANCE_ID="${instanceId}"`,
-    ...(apiKey ? [`export CACHLY_JWT="${apiKey}"`] : []),
-    `export CACHLY_HOOK_EVENT="${event}"`,
+    `#!/usr/bin/env node`,
+    `// cachly Ambient Recall — ${event} ${AMBIENT_HOOK_VERSION}`,
+    `// Pushes relevant memory into context automatically. Cross-platform Node hook`,
+    `// (no shell script — runs identically on Windows/macOS/Linux). Never blocks`,
+    `// the agent: every failure path exits 0 with no output (graceful degrade).`,
+    `import { spawn } from 'node:child_process';`,
+    `process.env.CACHLY_BRAIN_INSTANCE_ID = '${jsString(instanceId)}';`,
+    ...(apiKey ? [`process.env.CACHLY_JWT = '${jsString(apiKey)}';`] : []),
+    `process.env.CACHLY_HOOK_EVENT = '${jsString(event)}';`,
+    `try {`,
     // The hook payload (which contains the user's prompt) is piped verbatim on
-    // stdin — never spliced into shell source, so it cannot break the script.
-    `cat | ${DEFAULT_CLI} 2>/dev/null || true`,
-    `exit 0`,
+    // stdin — never spliced into source, so it cannot break the script.
+    `  const child = spawn('${jsString(DEFAULT_CLI)}', { shell: true, stdio: ['inherit', 'inherit', 'ignore'] });`,
+    `  child.on('error', () => process.exit(0));`,
+    `  child.on('close', () => process.exit(0));`,
+    `} catch {`,
+    `  process.exit(0);`,
+    `}`,
   ].join('\n');
 }
 
@@ -75,9 +92,11 @@ export type AmbientHookPaths = Record<AmbientHookEvent, string>;
 
 /** Build the `.claude/settings.json` hooks fragment for all four events. */
 export function buildAmbientSettingsHooks(paths: AmbientHookPaths): Record<string, HookMatcherGroup[]> {
+  // v3: the command is `node "<script>"` — one string that /bin/sh (macOS/
+  // Linux, Windows+Git-Bash) and PowerShell (native Windows) run identically.
   const entry = (event: AmbientHookEvent, matcher?: string): HookMatcherGroup => ({
     ...(matcher ? { matcher } : {}),
-    hooks: [{ type: 'command', command: paths[event], timeout: EVENT_TIMEOUTS[event] }],
+    hooks: [{ type: 'command', command: `node "${paths[event]}"`, timeout: EVENT_TIMEOUTS[event] }],
   });
   return {
     SessionStart: [entry('SessionStart')],
@@ -93,7 +112,13 @@ function isAmbientGroup(g: HookMatcherGroup, currentPaths: Set<string>): boolean
     hooks.length > 0 &&
     hooks.every((h) => {
       const cmd = h.command ?? '';
-      return cmd.includes(AMBIENT_SCRIPT_MARKER) || currentPaths.has(cmd);
+      // Matches v1/v2 entries (bare script path), v3 entries (`node "<path>"`),
+      // and marker-less test/custom paths passed as the current fragment.
+      return (
+        cmd.includes(AMBIENT_SCRIPT_MARKER) ||
+        currentPaths.has(cmd) ||
+        [...currentPaths].some((p) => cmd.includes(`"${p}"`))
+      );
     })
   );
 }
