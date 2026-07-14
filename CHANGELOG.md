@@ -2,6 +2,34 @@
 
 ---
 
+## [0.12.0] – 2026-07-15 — *"Explainable fix hints"*
+
+### Changed
+- **Fix hints now say what they are based on.** The proactive briefing toast
+  shows severity and confidence (`⚠️ cachly [major · 82%]: …`), and the
+  "Show fix" panel renders the full lesson card: real outcome (no longer
+  hardcoded to `failure`), severity, confidence, author, learned-date, a
+  Problem/Fix split, and a "Triggered because this file path matches: …" line
+  explaining *why* the warning fired. The panel also says how many lessons
+  matched in total (backed by new `outcome`/`author`/`learned_at`/`matched_on`
+  fields in the `/briefing` API; falls back to client-side path matching on
+  older APIs).
+- **One lesson-card renderer for all surfaces** — briefing panel, file recall,
+  and CLS review now share the same card with the same provenance fields.
+
+### Added
+- **Feedback on hints.** New toast actions: `Copy fix` (clipboard) and
+  `Not helpful` — the latter permanently suppresses that lesson for that file
+  (persisted across restarts, capped at 300 entries).
+- **Hint-lifecycle telemetry** (`vscode_briefing_shown` / `fix_opened` /
+  `fix_copied` / `not_helpful` / `dismissed`) so hint quality is measurable.
+- **CLS auto-learn is now reviewable.** The first compiler-fix auto-learn each
+  session shows a notification with `Show lesson` (renders exactly what was
+  saved) and `Disable auto-learn` (flips `cachly.clsLearning`, effective
+  immediately — no restart needed). Subsequent learns stay in the status bar.
+
+---
+
 ## [0.11.0] – 2026-07-12 — *"Honest metrics + interactive Brain panel"*
 
 ### Changed

@@ -1134,8 +1134,45 @@ async function saveLessonCommand(prefillTopic?: string, prefillWhatWorked?: stri
 
 // ── CLS: Compiler Learning Stream ────────────────────────────────────────────
 
+// First CLS auto-learn per session gets a real notification (what was learned +
+// opt-out); afterwards it stays a quiet status-bar message.
+let clsToastShown = false;
+
+/** Make the invisible auto-learning visible AND reviewable. */
+async function notifyClsLearned(topic: string, whatWorked: string, lessonContext: string): Promise<void> {
+  if (clsToastShown) {
+    vscode.window.setStatusBarMessage(`$(brain) cachly learned: ${topic}`, 6000);
+    return;
+  }
+  clsToastShown = true;
+  const action = await vscode.window.showInformationMessage(
+    `🧠 cachly auto-learned "${topic}" — a compiler error disappeared after your edit.`,
+    'Show lesson',
+    'Disable auto-learn',
+  );
+  if (action === 'Show lesson') {
+    const panel = vscode.window.createWebviewPanel(
+      'cachlyClsLesson',
+      `🧠 Auto-learned: ${topic}`,
+      vscode.ViewColumn.Beside,
+      { enableScripts: false },
+    );
+    panel.webview.html = buildRecallHtml(topic, [
+      { topic, what_worked: whatWorked, outcome: 'success', what_failed: lessonContext },
+    ]);
+  } else if (action === 'Disable auto-learn') {
+    await vscode.workspace.getConfiguration('cachly').update('clsLearning', false, vscode.ConfigurationTarget.Global);
+    void vscode.window.showInformationMessage(
+      '🧠 cachly: Compiler Learning Stream disabled (cachly.clsLearning). Re-enable it anytime in Settings.',
+    );
+  }
+}
+
 async function handleClsDiagnosticsChange(e: vscode.DiagnosticChangeEvent) {
   const config = vscode.workspace.getConfiguration('cachly');
+  // Re-check on every event so "Disable auto-learn" takes effect immediately —
+  // the listener registration only reads the setting once at activation.
+  if (!config.get<boolean>('clsLearning', true)) return;
   const apiKey = config.get<string>('apiKey', '');
   const baseUrl = apiBaseUrl(config);
   const instanceId = await getEffectiveInstanceId();
@@ -1199,6 +1236,9 @@ async function handleClsDiagnosticsChange(e: vscode.DiagnosticChangeEvent) {
       const topic = `fix:${diag.languageId}${codeStr ? `-${codeStr}` : ''}`;
       const fileName = uriStr.split('/').pop() ?? uriStr;
       const whatWorked = `Fixed "${diag.message.slice(0, 100)}" in ${fileName} after edit`;
+      const lessonContext = codeStr
+        ? `${diag.source ?? diag.languageId} error ${codeStr}: ${diag.message.slice(0, 200)}`
+        : diag.message.slice(0, 200);
 
       try {
         const clsAuthorName = vscode.workspace.getConfiguration('cachly').get<string>('authorName', '');
@@ -1206,20 +1246,19 @@ async function handleClsDiagnosticsChange(e: vscode.DiagnosticChangeEvent) {
           topic,
           outcome: 'success',
           what_worked: whatWorked,
-          context: codeStr ? `${diag.source ?? diag.languageId} error ${codeStr}: ${diag.message.slice(0, 200)}` : diag.message.slice(0, 200),
+          context: lessonContext,
           severity: 'minor',
           tags: ['cls', 'compiler', diag.languageId, diag.source ?? ''].filter(Boolean),
           source: 'vscode-cls',
           ...(clsAuthorName ? { author: clsAuthorName } : {}),
         });
         trackVSCodeEvent('vscode_cls_lesson_saved', { apiKey, instanceId, once: true });
-        // Make the invisible auto-learning visible (non-intrusive, auto-dismisses).
-        vscode.window.setStatusBarMessage(`$(brain) cachly learned: ${topic}`, 6000);
+        void notifyClsLearned(topic, whatWorked, lessonContext);
       } catch {
         // Network or auth failure — queue locally for later sync
         enqueueOfflineLesson({
           topic, outcome: 'success', what_worked: whatWorked,
-          context: codeStr ? `${diag.source ?? diag.languageId} error ${codeStr}: ${diag.message.slice(0, 200)}` : diag.message.slice(0, 200),
+          context: lessonContext,
           severity: 'minor', tags: ['cls', 'compiler', diag.languageId],
           source: 'vscode-cls', savedAt: Date.now(),
         });
@@ -3059,8 +3098,42 @@ async function checkMcpSetupAndNudge(context: vscode.ExtensionContext): Promise<
 let briefingDebounce: ReturnType<typeof setTimeout> | undefined;
 const briefedFiles = new Set<string>();
 
-interface BriefingWarning { topic: string; confidence: number; severity: string; message: string; fix: string }
-interface BriefingResponse { risk_level?: string; warnings?: BriefingWarning[] }
+// "Not helpful" suppressions, keyed `${relPath}::${topic}` — persisted in
+// globalState so a rejected hint never comes back for that file, across restarts.
+const BRIEFING_SUPPRESSED_KEY = 'cachly.briefingSuppressed';
+const BRIEFING_SUPPRESSED_MAX = 300;
+
+function briefingSuppressions(): Record<string, number> {
+  return extensionContext?.globalState.get<Record<string, number>>(BRIEFING_SUPPRESSED_KEY, {}) ?? {};
+}
+
+async function suppressBriefing(relPath: string, topic: string): Promise<void> {
+  if (!extensionContext) return;
+  const all = briefingSuppressions();
+  all[`${relPath}::${topic}`] = Date.now();
+  const keys = Object.keys(all);
+  if (keys.length > BRIEFING_SUPPRESSED_MAX) {
+    keys.sort((a, b) => all[a] - all[b]);
+    for (const k of keys.slice(0, keys.length - BRIEFING_SUPPRESSED_MAX)) delete all[k];
+  }
+  await extensionContext.globalState.update(BRIEFING_SUPPRESSED_KEY, all);
+}
+
+interface BriefingWarning {
+  topic: string; confidence: number; severity: string; message: string; fix: string;
+  outcome?: string; author?: string; learned_at?: string; matched_on?: string[];
+}
+interface BriefingResponse { risk_level?: string; warnings?: BriefingWarning[]; matched_lessons?: number }
+
+// Client-side fallback for the "why did this fire" line when the API doesn't
+// send matched_on yet — mirrors the server matcher (camelCase split, ≥3 chars,
+// token contained in topic).
+function matchedPathTokens(relPath: string, topic: string): string[] {
+  const t = topic.toLowerCase();
+  const expanded = relPath.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
+  const tokens = [...new Set(expanded.split(/[^a-z0-9]+/).filter(tok => tok.length >= 3))];
+  return tokens.filter(tok => t.includes(tok)).slice(0, 5);
+}
 
 /**
  * Push a brain briefing for a just-opened file. Surfaces a warning only when the
@@ -3088,23 +3161,50 @@ async function proactiveBriefingForDocument(doc: vscode.TextDocument): Promise<v
     }) as BriefingResponse | undefined;
 
     const risk = (res?.risk_level ?? 'low').toLowerCase();
-    const warnings = res?.warnings ?? [];
+    const suppressed = briefingSuppressions();
+    const warnings = (res?.warnings ?? []).filter(w => !suppressed[`${relPath}::${w.topic}`]);
     if ((risk !== 'medium' && risk !== 'high') || warnings.length === 0) return;
 
     const top = warnings[0];
     const icon = risk === 'high' ? '🛑' : '⚠️';
-    const label = `${icon} cachly: ${top.message || top.topic}`;
-    const action = await vscode.window.showWarningMessage(label, 'Show fix', 'Dismiss');
-    if (action === 'Show fix' && top.fix) {
+    // Show what the hint is based on, not just the claim: severity + confidence
+    // in the toast, full provenance in the panel.
+    const pct = Math.round((top.confidence ?? 0) * 100);
+    const meta = [top.severity, pct > 0 ? `${pct}%` : ''].filter(Boolean).join(' · ');
+    const more = warnings.length > 1 ? ` (+${warnings.length - 1} more)` : '';
+    const label = `${icon} cachly${meta ? ` [${meta}]` : ''}: ${top.message || top.topic}${more}`;
+
+    trackVSCodeEvent('vscode_briefing_shown', { apiKey, instanceId });
+    const action = await vscode.window.showWarningMessage(label, 'Show fix', 'Copy fix', 'Not helpful');
+    if (action === 'Show fix') {
+      trackVSCodeEvent('vscode_briefing_fix_opened', { apiKey, instanceId });
       const panel = vscode.window.createWebviewPanel(
         'cachlyBriefing',
         `${icon} Brain warning: ${path.basename(relPath)}`,
         vscode.ViewColumn.Beside,
         { enableScripts: false },
       );
-      panel.webview.html = buildRecallHtml(top.topic, [
-        { topic: top.topic, what_worked: top.fix, outcome: 'failure' },
-      ]);
+      panel.webview.html = buildRecallHtml(relPath, warnings.map(w => ({
+        topic: w.topic,
+        what_worked: w.fix,
+        outcome: w.outcome || 'failure',
+        what_failed: w.message,
+        confidence: w.confidence,
+        severity: w.severity,
+        author: w.author,
+        learned_at: w.learned_at,
+        matched_on: w.matched_on?.length ? w.matched_on : matchedPathTokens(relPath, w.topic),
+      })), { matchedLessons: res?.matched_lessons });
+    } else if (action === 'Copy fix') {
+      trackVSCodeEvent('vscode_briefing_fix_copied', { apiKey, instanceId });
+      await vscode.env.clipboard.writeText(top.fix || top.message || top.topic);
+      vscode.window.setStatusBarMessage('$(brain) cachly: fix copied to clipboard', 4000);
+    } else if (action === 'Not helpful') {
+      trackVSCodeEvent('vscode_briefing_not_helpful', { apiKey, instanceId });
+      await suppressBriefing(relPath, top.topic);
+      vscode.window.setStatusBarMessage(`$(brain) cachly: won't warn about "${top.topic}" for this file again`, 5000);
+    } else {
+      trackVSCodeEvent('vscode_briefing_dismissed', { apiKey, instanceId });
     }
   } catch {
     // Proactive feature — never surface errors for it. Allow a retry later.
@@ -3167,12 +3267,51 @@ async function recallForFileCommand(): Promise<void> {
   );
 }
 
-function buildRecallHtml(query: string, lessons: Array<{ topic: string; what_worked: string; outcome: string }>): string {
-  const rows = lessons.map(l => `
+// One "lesson card" shape for every surface that renders a lesson (briefing
+// panel, file recall, CLS review) — provenance and confidence render whenever
+// the caller has them, so no surface silently drops trust signals again.
+interface RecallLesson {
+  topic: string; what_worked: string; outcome: string;
+  what_failed?: string; confidence?: number; severity?: string;
+  author?: string; learned_at?: string; matched_on?: string[];
+}
+
+function buildRecallHtml(query: string, lessons: RecallLesson[], opts?: { matchedLessons?: number }): string {
+  const fmtDate = (iso?: string): string => {
+    if (!iso) return '';
+    const d = new Date(iso);
+    return isNaN(d.getTime()) ? '' : d.toISOString().slice(0, 10);
+  };
+  const rows = lessons.map(l => {
+    const pct = typeof l.confidence === 'number' && l.confidence > 0 ? `${Math.round(l.confidence * 100)}%` : '';
+    const badges = [
+      `<span class="outcome ${escapeHtml(l.outcome)}">${escapeHtml(l.outcome)}</span>`,
+      l.severity ? `<span class="badge">${escapeHtml(l.severity)}</span>` : '',
+      pct ? `<span class="badge" title="Brain confidence in this lesson">${pct} confidence</span>` : '',
+    ].filter(Boolean).join(' ');
+    const why = l.matched_on?.length
+      ? `<div class="why">Triggered because <code>${escapeHtml(query)}</code> matches: ${l.matched_on.map(t => `<code>${escapeHtml(t)}</code>`).join(', ')}</div>`
+      : '';
+    const problem = l.what_failed
+      ? `<div class="section"><span class="label">Problem</span> ${escapeHtml(l.what_failed)}</div>`
+      : '';
+    const fix = l.what_worked
+      ? `<div class="section"><span class="label">Fix</span> ${escapeHtml(l.what_worked)}</div>`
+      : '';
+    const provParts = [fmtDate(l.learned_at) ? `learned ${fmtDate(l.learned_at)}` : '', l.author ? `by ${escapeHtml(l.author)}` : ''].filter(Boolean);
+    const prov = provParts.length ? `<div class="prov">${provParts.join(' · ')}</div>` : '';
+    return `
     <div class="lesson">
-      <div class="topic">${escapeHtml(l.topic)} <span class="outcome ${l.outcome}">${l.outcome}</span></div>
-      <div class="body">${escapeHtml(l.what_worked)}</div>
-    </div>`).join('');
+      <div class="topic">${escapeHtml(l.topic)} ${badges}</div>
+      ${why}
+      ${problem}
+      ${fix}
+      ${prov}
+    </div>`;
+  }).join('');
+  const matchedNote = opts?.matchedLessons && opts.matchedLessons > lessons.length
+    ? ` · top ${lessons.length} of ${opts.matchedLessons} matched lessons`
+    : '';
   return `<!DOCTYPE html>
 <html>
 <head>
@@ -3182,7 +3321,12 @@ function buildRecallHtml(query: string, lessons: Array<{ topic: string; what_wor
   h2 { font-size: 15px; margin-bottom: 12px; }
   .lesson { border: 1px solid var(--vscode-panel-border); border-radius: 6px; padding: 10px 12px; margin-bottom: 8px; }
   .topic { font-family: monospace; font-size: 12px; color: var(--vscode-textLink-foreground); margin-bottom: 4px; }
-  .body { font-size: 13px; line-height: 1.5; }
+  .section { font-size: 13px; line-height: 1.5; margin-top: 4px; }
+  .label { font-size: 10px; text-transform: uppercase; letter-spacing: 0.5px; color: var(--vscode-descriptionForeground); margin-right: 4px; }
+  .why { font-size: 11px; color: var(--vscode-descriptionForeground); margin: 2px 0 4px; }
+  .why code { font-size: 11px; }
+  .prov { font-size: 11px; color: var(--vscode-descriptionForeground); margin-top: 6px; }
+  .badge { font-size: 10px; padding: 1px 6px; border-radius: 9px; margin-left: 6px; background: var(--vscode-badge-background); color: var(--vscode-badge-foreground); }
   .outcome { font-size: 10px; padding: 1px 6px; border-radius: 9px; margin-left: 6px; }
   .outcome.success { background: #1a3a1a; color: #4ec94e; }
   .outcome.failure { background: #3a1a1a; color: #e06c6c; }
@@ -3191,7 +3335,7 @@ function buildRecallHtml(query: string, lessons: Array<{ topic: string; what_wor
 </head>
 <body>
 <h2>🧠 Brain recall: <code>${escapeHtml(query)}</code></h2>
-<p style="color: var(--vscode-descriptionForeground); margin-bottom: 16px;">${lessons.length} lesson${lessons.length === 1 ? '' : 's'} found</p>
+<p style="color: var(--vscode-descriptionForeground); margin-bottom: 16px;">${lessons.length} lesson${lessons.length === 1 ? '' : 's'} found${matchedNote}</p>
 ${rows}
 </body>
 </html>`;
