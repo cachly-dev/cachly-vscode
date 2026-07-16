@@ -201,6 +201,37 @@ const clsActiveErrors = new Map<string, ClsTrackedDiag>();
 let clsLastEditedUri = '';
 let clsLastEditTime = 0;
 
+// ── Proactive notification budget ────────────────────────────────────────────
+// Cachly grew five surfaces that may interrupt unasked — proactive briefing,
+// the ambient "save this pattern?" prompt, CLS auto-learn, framework detection
+// and the session summary. Each gated itself locally (once per file, once per
+// session, …), which looked reasonable per surface and added up to a popup
+// every few minutes.
+//
+// They now share one budget: at most one interruption every
+// PROACTIVE_MIN_GAP_MS, and PROACTIVE_MAX_PER_SESSION in total. Whatever the
+// budget denies degrades to the status bar — always visible, never in the way.
+// `cachly.quietMode` turns every proactive popup off outright.
+const PROACTIVE_MIN_GAP_MS = 20 * 60_000;
+const PROACTIVE_MAX_PER_SESSION = 3;
+let lastProactiveAt = 0;
+let proactiveCount = 0;
+
+/**
+ * Ask for permission to interrupt the user. Returns true at most
+ * PROACTIVE_MAX_PER_SESSION times per session and never twice within
+ * PROACTIVE_MIN_GAP_MS — the caller must fall back to a status-bar message.
+ * Callers spend the budget by asking, so only call it right before showing.
+ */
+function claimInterrupt(): boolean {
+  if (vscode.workspace.getConfiguration('cachly').get<boolean>('quietMode', false)) return false;
+  if (proactiveCount >= PROACTIVE_MAX_PER_SESSION) return false;
+  if (Date.now() - lastProactiveAt < PROACTIVE_MIN_GAP_MS) return false;
+  lastProactiveAt = Date.now();
+  proactiveCount++;
+  return true;
+}
+
 let statusBarItem: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
 let lastHealth: BrainHealth | undefined;
@@ -1134,19 +1165,22 @@ async function saveLessonCommand(prefillTopic?: string, prefillWhatWorked?: stri
 
 // ── CLS: Compiler Learning Stream ────────────────────────────────────────────
 
-// First CLS auto-learn per session gets a real notification (what was learned +
-// opt-out); afterwards it stays a quiet status-bar message.
-let clsToastShown = false;
+/** The CLS explainer is worth showing once — after that it is just noise. */
+const CLS_EXPLAINED_KEY = 'cachly.clsExplained';
 
 /** Make the invisible auto-learning visible AND reviewable. */
 async function notifyClsLearned(topic: string, whatWorked: string, lessonContext: string): Promise<void> {
-  if (clsToastShown) {
+  // Explain auto-learning once per install, then stay in the status bar
+  // forever. Repeating it every session taught the user nothing new and just
+  // added to the notification pile.
+  const explained = extensionContext?.globalState.get<boolean>(CLS_EXPLAINED_KEY, false) ?? false;
+  if (explained || !claimInterrupt()) {
     vscode.window.setStatusBarMessage(`$(brain) cachly learned: ${topic}`, 6000);
     return;
   }
-  clsToastShown = true;
+  await extensionContext?.globalState.update(CLS_EXPLAINED_KEY, true);
   const action = await vscode.window.showInformationMessage(
-    `🧠 cachly auto-learned "${topic}" — a compiler error disappeared after your edit.`,
+    `🧠 cachly auto-learned "${topic}" — a compiler error disappeared after your edit. This happens quietly from now on.`,
     'Show lesson',
     'Disable auto-learn',
   );
@@ -1299,13 +1333,23 @@ async function promptAmbientLesson(doc: vscode.TextDocument, sample: string) {
   const fileName = doc.fileName.split('/').pop() ?? doc.fileName;
   const suggestedTopic = inferTopic(doc.fileName, sample);
 
+  // Gated per file, this asked once per file — i.e. all day long. Saving a
+  // lesson is never urgent, so an unaffordable prompt is simply dropped rather
+  // than queued: the next repeated pattern will ask again when there is budget.
+  if (!claimInterrupt()) return;
+
   const action = await vscode.window.showInformationMessage(
     `🧠 You've typed a similar pattern 3× in ${fileName}. Save as a Brain lesson?`,
     'Save Lesson',
     'Not now',
+    'Stop asking',
   );
   if (action === 'Save Lesson') {
     saveLessonCommand(suggestedTopic, sample);
+  } else if (action === 'Stop asking') {
+    await vscode.workspace.getConfiguration('cachly')
+      .update('ambientLearning', false, vscode.ConfigurationTarget.Global);
+    vscode.window.setStatusBarMessage('$(brain) cachly: ambient learning off (cachly.ambientLearning)', 5000);
   }
 }
 
@@ -2433,6 +2477,7 @@ async function detectAndSuggestFrameworks(context: vscode.ExtensionContext) {
   await context.workspaceState.update(wsKey, true);
   const unique = [...new Set(frameworks)];
 
+  if (!claimInterrupt()) return; // once-per-workspace already, and never urgent
   const action = await vscode.window.showInformationMessage(
     `🧠 Cachly detected: ${unique.join(', ')}. Load relevant Brain lessons for this stack?`,
     'Load Lessons',
@@ -3098,8 +3143,16 @@ async function checkMcpSetupAndNudge(context: vscode.ExtensionContext): Promise<
 let briefingDebounce: ReturnType<typeof setTimeout> | undefined;
 const briefedFiles = new Set<string>();
 
-// "Not helpful" suppressions, keyed `${relPath}::${topic}` — persisted in
-// globalState so a rejected hint never comes back for that file, across restarts.
+// Per-session dedupe by TOPIC, not just by file. Deduping only by file meant one
+// lesson could pop up again for every new file it matched — the same warning
+// dozens of times a day. A lesson gets one shot per session; the Brain panel
+// still lists it, and "Not helpful" silences it for good.
+const briefedTopics = new Set<string>();
+
+// "Not helpful" suppressions, keyed by topic — persisted in globalState so a
+// rejected lesson never comes back, across restarts. Keyed by topic rather than
+// by file: a lesson that is noise is noise everywhere, and per-file keys meant
+// the same warning kept reappearing on the next file it matched.
 const BRIEFING_SUPPRESSED_KEY = 'cachly.briefingSuppressed';
 const BRIEFING_SUPPRESSED_MAX = 300;
 
@@ -3107,10 +3160,10 @@ function briefingSuppressions(): Record<string, number> {
   return extensionContext?.globalState.get<Record<string, number>>(BRIEFING_SUPPRESSED_KEY, {}) ?? {};
 }
 
-async function suppressBriefing(relPath: string, topic: string): Promise<void> {
+async function suppressBriefing(topic: string): Promise<void> {
   if (!extensionContext) return;
   const all = briefingSuppressions();
-  all[`${relPath}::${topic}`] = Date.now();
+  all[topic] = Date.now();
   const keys = Object.keys(all);
   if (keys.length > BRIEFING_SUPPRESSED_MAX) {
     keys.sort((a, b) => all[a] - all[b]);
@@ -3121,18 +3174,20 @@ async function suppressBriefing(relPath: string, topic: string): Promise<void> {
 
 interface BriefingWarning {
   topic: string; confidence: number; severity: string; message: string; fix: string;
-  outcome?: string; author?: string; learned_at?: string; matched_on?: string[];
+  risk?: number; outcome?: string; author?: string; learned_at?: string; matched_on?: string[];
 }
 interface BriefingResponse { risk_level?: string; warnings?: BriefingWarning[]; matched_lessons?: number }
 
 // Client-side fallback for the "why did this fire" line when the API doesn't
-// send matched_on yet — mirrors the server matcher (camelCase split, ≥3 chars,
-// token contained in topic).
+// send matched_on yet — mirrors the server matcher: whole words (≥3 chars,
+// camelCase split) shared by the path and the topic.
 function matchedPathTokens(relPath: string, topic: string): string[] {
-  const t = topic.toLowerCase();
-  const expanded = relPath.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase();
-  const tokens = [...new Set(expanded.split(/[^a-z0-9]+/).filter(tok => tok.length >= 3))];
-  return tokens.filter(tok => t.includes(tok)).slice(0, 5);
+  const words = (s: string) => new Set(
+    s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').toLowerCase()
+      .split(/[^a-z0-9]+/).filter(w => w.length >= 3),
+  );
+  const topicWords = words(topic);
+  return [...words(relPath)].filter(w => topicWords.has(w)).slice(0, 5);
 }
 
 /**
@@ -3162,11 +3217,25 @@ async function proactiveBriefingForDocument(doc: vscode.TextDocument): Promise<v
 
     const risk = (res?.risk_level ?? 'low').toLowerCase();
     const suppressed = briefingSuppressions();
-    const warnings = (res?.warnings ?? []).filter(w => !suppressed[`${relPath}::${w.topic}`]);
+    const warnings = (res?.warnings ?? []).filter(w =>
+      // `${relPath}::${topic}` is the pre-0.12.1 per-file key — still honoured.
+      !suppressed[w.topic] && !suppressed[`${relPath}::${w.topic}`] && !briefedTopics.has(w.topic),
+    );
     if ((risk !== 'medium' && risk !== 'high') || warnings.length === 0) return;
 
     const top = warnings[0];
+    briefedTopics.add(top.topic);
     const icon = risk === 'high' ? '🛑' : '⚠️';
+
+    // Out of interruption budget: still surface it, just quietly. The lesson
+    // stays in the Brain panel and the CodeLens for this file.
+    if (!claimInterrupt()) {
+      vscode.window.setStatusBarMessage(
+        `$(brain) cachly: ${warnings.length} Brain warning(s) for ${path.basename(relPath)} — open the Brain panel`,
+        8000,
+      );
+      return;
+    }
     // Show what the hint is based on, not just the claim: severity + confidence
     // in the toast, full provenance in the panel.
     const pct = Math.round((top.confidence ?? 0) * 100);
@@ -3201,8 +3270,8 @@ async function proactiveBriefingForDocument(doc: vscode.TextDocument): Promise<v
       vscode.window.setStatusBarMessage('$(brain) cachly: fix copied to clipboard', 4000);
     } else if (action === 'Not helpful') {
       trackVSCodeEvent('vscode_briefing_not_helpful', { apiKey, instanceId });
-      await suppressBriefing(relPath, top.topic);
-      vscode.window.setStatusBarMessage(`$(brain) cachly: won't warn about "${top.topic}" for this file again`, 5000);
+      await suppressBriefing(top.topic);
+      vscode.window.setStatusBarMessage(`$(brain) cachly: won't warn about "${top.topic}" again`, 5000);
     } else {
       trackVSCodeEvent('vscode_briefing_dismissed', { apiKey, instanceId });
     }

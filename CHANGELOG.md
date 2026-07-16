@@ -2,6 +2,43 @@
 
 ---
 
+## [0.12.1] – 2026-07-16 — *"Stop the false alarms"*
+
+### Changed
+- **One notification budget for the whole extension.** Five surfaces could
+  interrupt unasked — proactive briefing, the ambient "save this pattern?"
+  prompt, CLS auto-learn, framework detection and the session summary. Each
+  gated itself locally (once per file, once per session, …), which was
+  reasonable per surface and added up to a popup every few minutes. They now
+  share one budget: **at most one interruption every 20 minutes, 3 per
+  session**. Anything denied degrades to the status bar instead of a popup.
+- **New `cachly.quietMode`** — turns every proactive popup off outright.
+  Warnings and learned lessons stay available in the status bar and the Brain
+  panel.
+- The **"save this pattern?" prompt** gained a **Stop asking** button, and the
+  **auto-learn explainer** is now shown once per install instead of once per
+  session.
+
+### Fixed
+- **Solved tasks no longer pop up as 🛑 alarms.** The Brain stamps every
+  *success* lesson with confidence 1.0 ("this knowledge is verified"), and the
+  briefing API read that as *risk* — so a finished task resurfaced as a
+  high-risk warning showing the `what_failed` it had already fixed, again and
+  again. Risk is now derived from the lesson's outcome (a success is a
+  known-good pattern, not a hazard) and damped by confidence, server-side —
+  so this fix applies even before you update the extension.
+- **A lesson can no longer nag on every file.** Warnings are deduped per
+  lesson per session (was: per file, so the same warning returned with the next
+  file it matched), and **Not helpful** now silences a lesson everywhere
+  instead of only in the current file.
+- **Fewer wrong matches.** Matching is on whole words instead of substrings:
+  `kan` no longer matches the topic `kanzlei:…`, and `api` no longer matches
+  `rapid-…`.
+- **Deterministic warning.** Equally-risky lessons are tie-broken by topic;
+  Redis scan order previously made the surfaced warning a coin flip.
+
+---
+
 ## [0.12.0] – 2026-07-15 — *"Explainable fix hints"*
 
 ### Changed

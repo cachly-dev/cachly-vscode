@@ -2,7 +2,7 @@
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
   "description": "AI Brain for VS Code — your AI finally remembers. Status bar lesson counter, ambient learning, CodeLens hints, team Brain sharing, Memory Crystal 💎, cost savings tracker, one-click trial setup.",
-  "version": "0.12.0",
+  "version": "0.12.1",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
   "license": "Apache-2.0",
@@ -119,6 +119,11 @@
           "type": "boolean",
           "default": true,
           "description": "Proactively warn when you open a file the Brain knows has a high-risk failure pattern (push briefing, not pull)"
+        },
+        "cachly.quietMode": {
+          "type": "boolean",
+          "default": false,
+          "description": "Never interrupt with proactive popups (fix hints, 'save this pattern?', auto-learn). Everything is still surfaced in the status bar and the Brain panel."
         },
         "cachly.startupBriefing": {
           "type": "boolean",
