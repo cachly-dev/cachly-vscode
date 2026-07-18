@@ -2,6 +2,25 @@
 
 ---
 
+## [0.12.2] – 2026-07-18 — *"Your counter survives a reboot"*
+
+### Fixed
+- **Recall counter no longer shows 0/500 after a restart.** The first health
+  fetch after a cold start often runs before the network is up (or while the
+  instance is still waking) and came back zeroed — repainting the real monthly
+  counter as "0/500 recalls". The extension now persists the last snapshot that
+  actually carried data and shows it (marked *"showing last known counts —
+  reconnecting"*) until a good fetch replaces it. The server-side counter was
+  never lost; this was purely a cold-start display bug.
+
+### Changed
+- **`cachly.quietMode` now also covers the startup briefing popup and the
+  "synced offline lessons" popup.** Both were exempt from the notification
+  budget introduced in 0.12.1. With quiet mode on, the extension never opens a
+  popup on its own — everything stays in the status bar and the Brain panel.
+
+---
+
 ## [0.12.1] – 2026-07-16 — *"Stop the false alarms"*
 
 ### Changed

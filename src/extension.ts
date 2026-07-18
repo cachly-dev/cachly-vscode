@@ -235,6 +235,20 @@ function claimInterrupt(): boolean {
 let statusBarItem: vscode.StatusBarItem;
 let refreshTimer: NodeJS.Timeout | undefined;
 let lastHealth: BrainHealth | undefined;
+
+// Last snapshot that actually carried data, persisted across editor restarts.
+// On a cold start the first fetch often runs before the network is up (or while
+// the instance is still waking) and comes back zeroed — which repainted real
+// monthly counters as "0/500 recalls" after every reboot. We render this
+// snapshot instead until a good fetch replaces it.
+const LAST_GOOD_HEALTH_KEY = 'cachly.lastGoodHealth';
+interface HealthSnapshot {
+  lessons: number;
+  totalRecalls: number;
+  recallLimit: number;
+  estimatedTokensSaved: number;
+  ts: number;
+}
 let brainPanel: vscode.WebviewPanel | undefined;
 let extensionContext: vscode.ExtensionContext;
 
@@ -496,9 +510,11 @@ export function activate(context: vscode.ExtensionContext) {
   startSyncTimer();
   void flushOfflineQueue().then((n) => {
     if (n > 0) {
-      void vscode.window.showInformationMessage(
-        `🧠 cachly: synced ${n} offline lesson${n === 1 ? '' : 's'} to your Brain.`,
-      );
+      if (!vscode.workspace.getConfiguration('cachly').get<boolean>('quietMode', false)) {
+        void vscode.window.showInformationMessage(
+          `🧠 cachly: synced ${n} offline lesson${n === 1 ? '' : 's'} to your Brain.`,
+        );
+      }
       updateStatusBar();
     }
   });
@@ -564,6 +580,31 @@ async function updateStatusBar() {
 
     const prevRecalls = lastHealth?.totalRecalls ?? 0;
     const health = await fetchBrainHealth();
+
+    // Cold-start guard: an empty-handed fetch (network still down, instance
+    // waking, transient zeroed stats) must not repaint real counters as zeros.
+    const snapshot = extensionContext?.globalState.get<HealthSnapshot>(LAST_GOOD_HEALTH_KEY);
+    const cameBackEmpty = health.lessons === 0 && health.totalRecalls === 0
+      && (health.status === 'unreachable' || health.status === 'degraded' || health.status === 'empty');
+    let showingSnapshot = false;
+    if (cameBackEmpty && snapshot && (snapshot.lessons > 0 || snapshot.totalRecalls > 0)) {
+      health.lessons = snapshot.lessons;
+      health.totalRecalls = snapshot.totalRecalls;
+      health.recallLimit = snapshot.recallLimit;
+      health.estimatedTokensSaved = snapshot.estimatedTokensSaved;
+      health.estimatedCostSaved = snapshot.estimatedTokensSaved * COST_PER_TOKEN;
+      health.status = 'degraded';
+      showingSnapshot = true;
+    } else if (health.lessons > 0 || health.totalRecalls > 0) {
+      const next: HealthSnapshot = {
+        lessons: health.lessons,
+        totalRecalls: health.totalRecalls,
+        recallLimit: health.recallLimit,
+        estimatedTokensSaved: health.estimatedTokensSaved,
+        ts: Date.now(),
+      };
+      void extensionContext?.globalState.update(LAST_GOOD_HEALTH_KEY, next);
+    }
     lastHealth = health;
 
     if (health.status === 'setup_needed') {
@@ -624,7 +665,11 @@ async function updateStatusBar() {
         `- 🔁 **${health.totalRecalls}** recalls ${monthly ? `of ${health.recallLimit} this month` : 'all-time'}\n` +
         (health.estimatedTokensSaved >= 1000 ? `- 💰 ${fmtTokens(health.estimatedTokensSaved)} saved (est. ~${TOKENS_PER_RECALL} tok per reused lesson)\n` : '') +
         (sessionInjections > 0 ? `- 🔬 Ambient recall (session): ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected\n` : '') +
-        (health.status === 'degraded' ? `\n⚠️ _Degraded: brain is reachable but some features are slow._\n` : '') +
+        (health.status === 'degraded'
+          ? (showingSnapshot
+            ? `\n⚠️ _Showing last known counts — reconnecting to your Brain…_\n`
+            : `\n⚠️ _Degraded: brain is reachable but some features are slow._\n`)
+          : '') +
         `\n_Click to open Brain Health._`,
       );
       statusBarItem.command = 'cachly.showBrainHealth';
@@ -1012,6 +1057,9 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
 async function showStartupBriefing() {
   const config = vscode.workspace.getConfiguration('cachly');
   if (!config.get<boolean>('startupBriefing', true)) return;
+  // quietMode silences every unasked-for popup — the briefing is one of them.
+  // The same numbers stay visible in the status bar and the Brain Health panel.
+  if (config.get<boolean>('quietMode', false)) return;
   const apiKey = config.get<string>('apiKey', '');
   const instanceId = await getEffectiveInstanceId();
   if (!isValidApiKey(apiKey) || !instanceId) return;
