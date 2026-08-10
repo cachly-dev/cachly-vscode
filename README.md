@@ -83,7 +83,7 @@ On workspace open, the extension scans `package.json`, `go.mod`, `requirements.t
 CodeLens and the Brain Health panel show your team's lesson count and author attribution: `👥 3 team lessons · Elena, Tom`. New team member? Their AI arrives pre-briefed from day one. Every fix your team ever solved — available to every AI, forever.
 
 ### 💎 Memory Crystal — Instant context delivery
-When a compressed Crystal is loaded at session start, the status bar shows 💎. That's 800+ lessons delivered to your AI in under 50ms. Full context before the first keystroke.
+When a compressed Crystal is loaded at session start, the status bar shows 💎. That's 800+ lessons delivered to your AI instantly. Full context before the first keystroke.
 
 ### 🚀 Setup Detection & Instant Trial
 If the MCP server isn't connected, the extension detects it and guides you through instant setup — including a 14-day free trial of the Dev tier, no credit card. One-click start from inside VS Code.
@@ -171,7 +171,7 @@ The extension is **free forever**. It connects to your cachly Brain:
 | **Speed** | 900 MB + Dragonfly | €79/mo | AI-heavy workloads |
 | **Business** | 7 GB | €199/mo | Scale-ups |
 
-✅ All plans: **German servers · GDPR-compliant · 99.9% SLA · No credit card for Free**
+✅ All plans: **German servers · GDPR-compliant · No credit card for Free**
 
 ---
 
@@ -182,7 +182,7 @@ The extension is **free forever**. It connects to your cachly Brain:
 | **This extension** | Brain panel inside VS Code |
 | **[`npx @cachly-dev/mcp-server@latest autopilot`](https://www.npmjs.com/package/@cachly-dev/mcp-server)** | One-command setup for all editors |
 | **[`@cachly-dev/mcp-server`](https://www.npmjs.com/package/@cachly-dev/mcp-server)** | The Brain backend — works in Claude Code, Cursor, Windsurf, Copilot, Cline, Zed |
-| **[`@cachly-dev/openclaw`](https://www.npmjs.com/package/@cachly-dev/openclaw)** | Cut LLM costs 60–90% with semantic caching |
+| **[`@cachly-dev/openclaw`](https://www.npmjs.com/package/@cachly-dev/openclaw)** | Cut LLM costs with semantic caching |
 | **[`@cachly-dev/cli`](https://www.npmjs.com/package/@cachly-dev/cli)** | Terminal CLI for Brain management |
 
 **Supported editors (via MCP server):** GitHub Copilot · Cursor · Windsurf · Claude Code · Cline · Zed
