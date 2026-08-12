@@ -23,6 +23,22 @@
 
 ---
 
+## See it in action
+
+![The Cachly Brain extension running inside VS Code, with the Brain status visible in the status bar, bottom-right](https://cachly.dev/screenshots/vscode/shot1-hero.png)
+
+*The extension running inside VS Code — the Brain status is always visible in the status bar, bottom-right.*
+
+![The Cachly Brain status bar zoomed in, showing the lesson count and the recall count](https://cachly.dev/screenshots/vscode/shot2-statusbar.png)
+
+*The status bar zoomed in: `Brain: 16 lessons · 0/500 recalls` — the honest state of a freshly set up Brain seeded with the starter lesson set, not an error.*
+
+![The Lessons view inside VS Code, listing six stored lessons across the full width of the panel](https://cachly.dev/screenshots/vscode/shot3-lesson-card.png)
+
+*The Lessons view — every stored lesson, full width, with its severity, recall count, and the date it was learned.*
+
+---
+
 ## The Pain Points This Solves
 
 **Without this extension:**
