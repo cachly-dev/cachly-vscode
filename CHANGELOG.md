@@ -2,6 +2,19 @@
 
 ---
 
+## [0.12.3] – 2026-08-13 — *"The store page catches up"*
+
+### Changed
+- **Marketplace page: screenshots added and reordered**, so the most telling
+  one comes first. The extension code is byte-identical to 0.12.2 — this
+  release exists because a store page only updates when a new version ships.
+
+### Note
+- No functional changes. If you are on 0.12.2, you lose nothing by staying;
+  update only if you want the current listing.
+
+---
+
 ## [0.12.2] – 2026-07-18 — *"Your counter survives a reboot"*
 
 ### Fixed
