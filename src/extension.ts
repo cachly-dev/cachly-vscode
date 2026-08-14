@@ -557,6 +557,78 @@ function startRefreshLoop() {
   refreshTimer = setInterval(() => updateStatusBar(), interval);
 }
 
+// ── Der stille Nutzer: nach 100 Lektionen einmal nach einer Adresse fragen ───
+//
+// ─── DER FALL, DEN DAS HIER SCHLIESST ────────────────────────────────────────
+//
+// Der Sofort-Test (silentAutoSetup, Schritt 2) ist absichtlich klickfrei: Kein
+// Konto, keine Adresse, sofort ein Brain. Genau das erzeugt aber Nutzer, die
+// niemand erreichen kann. Ihre Adresse lautet <uuid>@trial.cachly.dev, und
+// isLikelyTestEmail im Backend sortiert sie aus jeder Rundmail aus.
+//
+// Gemessen am 13.08.2026 in der Produktionsdatenbank: Der aktivste Nutzer des
+// Tages war ein solcher Sofort-Test — 400 Lektionen an einem Tag, 1370 seit
+// dem 12.07., taeglich in Benutzung. Er bekommt weder die Warnung vor dem
+// Testende noch einen Hinweis, wenn sein Speicher voll laeuft. Der wertvollste
+// Nutzer, den cachly hatte, war unerreichbar.
+//
+// ─── WARUM AN DIESER STELLE ──────────────────────────────────────────────────
+//
+// Die Zahl kommt aus fetchBrainHealth, also vom Server — nicht aus einem
+// eigenen Zaehler in der Erweiterung. Ein zweiter Zaehler waere eine zweite
+// Wahrheit: Er wuerde Lektionen uebersehen, die ueber MCP oder die
+// Weboberflaeche entstanden sind, und beim Neuaufsetzen der Erweiterung wieder
+// bei null anfangen.
+//
+// ─── WANN ER SCHWEIGT ────────────────────────────────────────────────────────
+//
+// Bei einem verknuepften Konto (cky_live_), bei weniger als 100 Lektionen, im
+// Notbetrieb (dann ist die API nicht erreichbar und Verknuepfen wuerde ohnehin
+// scheitern), und nach einem "Nicht mehr fragen". Ein "Spaeter" verstummt fuer
+// 14 Tage. Ein Hinweis, der sich wiederholt, wird weggeklickt statt gelesen.
+const ADRESSE_GEFRAGT_KEY = 'cachly.addressPromptState';
+const ADRESSE_SCHWELLE = 100;
+const ADRESSE_ERNEUT_NACH_MS = 14 * 24 * 60 * 60 * 1000;
+
+type AdressStand = { zuletzt: number; nie?: boolean };
+
+async function frageNachAdresse(lessons: number, imNotbetrieb: boolean): Promise<void> {
+  if (imNotbetrieb || lessons < ADRESSE_SCHWELLE) return;
+  if (!extensionContext) return;
+
+  const config = vscode.workspace.getConfiguration('cachly');
+  const apiKey = config.get<string>('apiKey', '');
+  // Nur Sofort-Test-Schluessel haben kein Konto dahinter. cky_live_ ist
+  // verknuepft, cky_test_ gehoert uns selbst.
+  if (!apiKey.startsWith('cky_trial_')) return;
+
+  const stand = extensionContext.globalState.get<AdressStand>(ADRESSE_GEFRAGT_KEY);
+  if (stand?.nie) return;
+  if (stand && Date.now() - stand.zuletzt < ADRESSE_ERNEUT_NACH_MS) return;
+
+  // Zuerst merken, dann fragen. Andersherum wuerde ein Absturz zwischen Frage
+  // und Merken den Hinweis bei jedem Aktualisieren erneut zeigen.
+  await extensionContext.globalState.update(ADRESSE_GEFRAGT_KEY, { zuletzt: Date.now() } as AdressStand);
+  trackVSCodeEvent('vscode_address_prompt_shown', {
+    apiKey,
+    instanceId: config.get<string>('instanceId', ''),
+    once: true,
+  });
+
+  const antwort = await vscode.window.showInformationMessage(
+    `🧠 Your Brain holds ${lessons} lessons — and we have no way to reach you. ` +
+    `This setup has no email attached, so you won't hear from us before your trial ends ` +
+    `or your Brain runs out of space. Linking an account takes about 20 seconds and keeps everything you have.`,
+    'Link account', 'Later', "Don't ask again",
+  );
+
+  if (antwort === 'Link account') {
+    await linkAccountCommand();
+  } else if (antwort === "Don't ask again") {
+    await extensionContext.globalState.update(ADRESSE_GEFRAGT_KEY, { zuletzt: Date.now(), nie: true } as AdressStand);
+  }
+}
+
 async function updateStatusBar() {
   try {
     // Never-connected state: a fresh install has no apiKey/instance. fetchBrainHealth
@@ -606,6 +678,10 @@ async function updateStatusBar() {
       void extensionContext?.globalState.update(LAST_GOOD_HEALTH_KEY, next);
     }
     lastHealth = health;
+
+    // Fragt hoechstens einmal alle 14 Tage und nur bei einem Sofort-Test ohne
+    // Konto. void: die Statuszeile darf nicht auf eine Nutzerantwort warten.
+    void frageNachAdresse(health.lessons, showingSnapshot);
 
     if (health.status === 'setup_needed') {
       statusBarItem.text = '$(warning) Brain: re-auth needed';

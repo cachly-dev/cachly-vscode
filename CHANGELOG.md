@@ -2,6 +2,30 @@
 
 ---
 
+## [0.12.4] – 2026-08-14 — *"We should be able to reach you"*
+
+### Added
+- **One quiet ask for an email, after your 100th lesson.** The instant trial is
+  deliberately click-free: no account, no address, a Brain in seconds. The side
+  effect is that we cannot tell you anything — not that your trial is ending,
+  not that your Brain is running out of room. On 13 August 2026 the single most
+  active user of the day was exactly such a setup: 400 lessons in one day, 1370
+  since mid-July, and no way to say a word to them.
+- The prompt appears **once**, only on a trial key, only past 100 lessons, and
+  never while the API is unreachable. "Later" silences it for 14 days,
+  "Don't ask again" for good. Your lessons are kept either way — linking an
+  account changes nothing about the data, only about whether we can write to you.
+- New telemetry event `vscode_address_prompt_shown` (fire-and-forget, once per
+  window) so the funnel shows how many people were asked, not just how many
+  linked.
+
+### Note
+- The lesson count comes from the server, not from a counter inside the
+  extension. A local counter would miss lessons written through MCP or the web
+  dashboard, and would start at zero after a reinstall.
+
+---
+
 ## [0.12.3] – 2026-08-13 — *"The store page catches up"*
 
 ### Changed
