@@ -1606,8 +1606,30 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
   let githubLogin = '';
   let isTrial = false;
 
+  /**
+   * A KEY THAT IS ALREADY THERE IS NEVER REPLACED (Fix 2026-08-17).
+   *
+   * This function also runs when the key is valid but `instanceId` is empty —
+   * which happens whenever step 4 below could not reach
+   * /api/v1/instances/auto once. It then started from an empty local `apiKey`,
+   * fell through to instant-trial, and wrote a FRESH TRIAL KEY over the
+   * existing one at step 3.
+   *
+   * For a paying user that is silent data loss: the new key points at a new,
+   * empty Brain, and every lesson they ever saved sits on the old instance
+   * they can no longer reach from the editor. Nothing on screen says so — the
+   * status bar simply shows a Brain with zero lessons.
+   *
+   * A missing instance id is a reason to provision an instance, never a reason
+   * to get a new identity.
+   */
+  if (isValidApiKey(existingKey)) {
+    apiKey = existingKey.trim();
+    instanceId = config.get<string>('instanceId', '');
+  }
+
   // ── 1. GitHub silent exchange (zero-click) ───────────────────────────────
-  const ghResult = await tryGitHubSilentAuth(BASE_URL);
+  const ghResult = apiKey ? null : await tryGitHubSilentAuth(BASE_URL);
   if (ghResult) {
     apiKey = ghResult.apiKey;
     instanceId = ghResult.instanceId ?? '';
@@ -1617,13 +1639,22 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
   // ── 2. Instant-trial fallback (also zero-click) ──────────────────────────
   if (!apiKey) {
     try {
-      type TrialResp = { api_key: string; expires_at: string; instance_id: string; trial: boolean };
+      /**
+   * The API returns `trial_ends_at`, not `expires_at` (verified against
+   * POST /auth/instant-trial on 2026-08-17: fields are api_key, instance_id,
+   * message, trial, trial_ends_at). Reading the wrong name meant
+   * `trialExpiresAt` was never stored — which made the whole trial-expiry
+   * banner dead code. A trial user was never warned; their Brain simply
+   * stopped answering one day. Both names are accepted so an older API
+   * shape keeps working.
+   */
+  type TrialResp = { api_key: string; instance_id: string; trial: boolean; trial_ends_at?: string; expires_at?: string };
       const trialResp = await apiPostAnon(`${BASE_URL}/auth/instant-trial`, {}) as TrialResp | null;
       if (trialResp?.api_key) {
         apiKey = trialResp.api_key;
         instanceId = trialResp.instance_id ?? '';
         isTrial = true;
-        await config.update('trialExpiresAt', trialResp.expires_at, vscode.ConfigurationTarget.Global);
+        await config.update('trialExpiresAt', (trialResp.trial_ends_at ?? trialResp.expires_at), vscode.ConfigurationTarget.Global);
       }
     } catch { /* offline — caller will show onboarding wizard */ }
   }
@@ -1776,7 +1807,16 @@ async function setupAICommand() {
   // ── Step 0b: Instant Trial (zero-friction fallback, no account needed) ────
   // Try to get a 14-day trial key immediately, no sign-up required.
   // If the user already has a key (trial or real), skip this step.
-  type TrialResp = { api_key: string; expires_at: string; instance_id: string; trial: boolean };
+  /**
+   * The API returns `trial_ends_at`, not `expires_at` (verified against
+   * POST /auth/instant-trial on 2026-08-17: fields are api_key, instance_id,
+   * message, trial, trial_ends_at). Reading the wrong name meant
+   * `trialExpiresAt` was never stored — which made the whole trial-expiry
+   * banner dead code. A trial user was never warned; their Brain simply
+   * stopped answering one day. Both names are accepted so an older API
+   * shape keeps working.
+   */
+  type TrialResp = { api_key: string; instance_id: string; trial: boolean; trial_ends_at?: string; expires_at?: string };
   if (!apiKey) {
     let trialResp: TrialResp | null = null;
     try {
@@ -1787,7 +1827,7 @@ async function setupAICommand() {
       apiKey = trialResp.api_key;
       await config.update('apiKey', apiKey, vscode.ConfigurationTarget.Global);
       // Store trial expiry so the status bar can show a countdown
-      await config.update('trialExpiresAt', trialResp.expires_at, vscode.ConfigurationTarget.Global);
+      await config.update('trialExpiresAt', (trialResp.trial_ends_at ?? trialResp.expires_at), vscode.ConfigurationTarget.Global);
 
       // If the API already provisioned an instance, store it directly
       if (trialResp.instance_id) {
@@ -1872,7 +1912,7 @@ async function setupAICommand() {
       if (retryResp?.api_key) {
         apiKey = retryResp.api_key;
         await config.update('apiKey', apiKey, vscode.ConfigurationTarget.Global);
-        if (retryResp.expires_at) await config.update('trialExpiresAt', retryResp.expires_at, vscode.ConfigurationTarget.Global);
+        if ((retryResp.trial_ends_at ?? retryResp.expires_at)) await config.update('trialExpiresAt', (retryResp.trial_ends_at ?? retryResp.expires_at), vscode.ConfigurationTarget.Global);
         if (retryResp.instance_id) await config.update('instanceId', retryResp.instance_id, vscode.ConfigurationTarget.Global);
         token = apiKey;
         await finishSetup(token, BASE_URL);

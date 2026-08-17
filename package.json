@@ -1,10 +1,14 @@
 {
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
-  "description": "AI Brain for VS Code — your AI finally remembers. Status bar lesson counter, ambient learning, CodeLens hints, team Brain sharing, Memory Crystal 💎, cost savings tracker, one-click trial setup.",
+  "description": "ChatGPT and Claude remember your conversations — cachly remembers your codebase. The bug you fixed, why you chose Postgres, the deploy step that always breaks. Free trial without an account.",
   "version": "0.12.4",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
+  "galleryBanner": {
+    "color": "#1e1b3a",
+    "theme": "dark"
+  },
   "license": "Apache-2.0",
   "repository": {
     "type": "git",

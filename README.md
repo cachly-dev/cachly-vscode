@@ -1,11 +1,30 @@
 # 🧠 cachly Brain — VS Code Extension
 
-> **Your AI forgets everything when VS Code closes. This extension makes it remember.**  
-> Status bar shows your lesson count live. Brain Health panel shows what it knows. Ambient Learning stores patterns while you code. Team Brain awareness shares knowledge across your whole team. One-click setup, free forever.
+> **ChatGPT and Claude remember your conversations. cachly remembers your codebase.**  
+> The bug you fixed. Why you chose Postgres. The deploy step that always breaks — and everything your teammates learned. It stays when someone leaves the team, and it comes along when you switch assistants.
+>
+> **This extension puts that memory in front of you.** Lesson count live in the status bar, a Brain Health panel showing what it knows, Ambient Learning that stores patterns while you code, and Team Brain awareness so what one person learns reaches everyone.
+>
+> **Nothing to sign up for.** On first start the extension fetches a free trial brain by itself — no account, no credit card, no key to paste. Link an account later to keep the data. EU servers, GDPR.
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=cachly-dev.cachly-brain">
-    <img src="https://img.shields.io/badge/VS%20Code%20Marketplace-v0.9.7-blue?logo=visual-studio-code&logoColor=white" alt="VS Code Marketplace v0.9.7" />
+    <!-- Version NICHT eintippen: hier stand v0.9.7, waehrend die Erweiterung
+         bei 0.12.4 war. Eine Zahl an zwei Orten laeuft auseinander, und eine
+         drei Nebenversionen alte Zahl liest sich wie ein verlassenes Projekt.
+         Diese Badges holen die Zahl beim Marketplace.
+
+         NICHT shields.io benutzen: dessen visual-studio-marketplace-Badges
+         sind abgekuendigt. Sie antworten mit HTTP 200 und zeigen dann das Wort
+         "retired" an — am 17.08.2026 abgerufen und genau so gesehen. Ein
+         Statuscode ist kein Beleg dafuer, dass etwas Sinnvolles im Bild steht.
+         vsmarketplacebadges.dev liefert die echte Zahl (gepruefte Antwort:
+         v0.12.3, also der veroeffentlichte Stand). -->
+    <img src="https://vsmarketplacebadges.dev/version-short/cachly-dev.cachly-brain.svg?label=VS%20Code%20Marketplace" alt="VS Code Marketplace version" />
+  </a>
+  &nbsp;
+  <a href="https://marketplace.visualstudio.com/items?itemName=cachly-dev.cachly-brain">
+    <img src="https://vsmarketplacebadges.dev/installs-short/cachly-dev.cachly-brain.svg?label=installs" alt="Installs" />
   </a>
   &nbsp;
   <a href="https://cachly.dev?utm_source=vscode-marketplace&utm_medium=readme&utm_campaign=extension">
