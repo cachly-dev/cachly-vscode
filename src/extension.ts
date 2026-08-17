@@ -254,6 +254,19 @@ let extensionContext: vscode.ExtensionContext;
 
 // Resolved once on activation from the real extension manifest so telemetry
 // always reports the installed version (was hardcoded → analytics stuck on one).
+/**
+ * The marketplace identity of this extension: `<publisher>.<name>` from
+ * package.json. It is written here ONCE.
+ *
+ * It used to be written twice, and the two spellings had already drifted:
+ * `activate()` looked up `cachly-dev.cachly-brain` (correct), while the
+ * User-Agent looked up `cachly.cachly-brain` (wrong publisher). The wrong
+ * lookup returns undefined, silently falls back to `'0'`, and every install
+ * on earth reported itself as `cachly-vscode/0`. Nothing failed, nothing
+ * logged — the version was simply always wrong.
+ */
+const EXTENSION_ID = 'cachly-dev.cachly-brain';
+
 let extensionVersion = '0.0.0';
 
 // Session-summary tracking: count lessons saved during this VS Code window session
@@ -337,9 +350,9 @@ function log(message: string, ...details: unknown[]): void {
 
 export function activate(context: vscode.ExtensionContext) {
   extensionContext = context;
-  // Read the real installed version from the manifest (cachly-dev.cachly-brain).
+  // Read the real installed version from the manifest (EXTENSION_ID).
   extensionVersion =
-    (vscode.extensions.getExtension('cachly-dev.cachly-brain')?.packageJSON?.version as string | undefined) ??
+    (vscode.extensions.getExtension(EXTENSION_ID)?.packageJSON?.version as string | undefined) ??
     (context.extension?.packageJSON?.version as string | undefined) ??
     extensionVersion;
   context.subscriptions.push({ dispose: () => brainPanel?.dispose() });
@@ -2731,13 +2744,29 @@ class HttpError extends Error {
  * in any log naming the extension. An identified client can be allowlisted
  * and found in access logs; an anonymous one can only be debugged by outage.
  */
-const USER_AGENT = `cachly-vscode/${(() => { try { return (vscode.extensions.getExtension('cachly.cachly-brain')?.packageJSON as { version?: string })?.version ?? '0'; } catch { return '0'; } })()}`;
+/**
+ * The User-Agent every request carries: `cachly-vscode/<version>`.
+ *
+ * It is a FUNCTION, not a constant. A module-level constant is evaluated when
+ * this file is imported, which can happen before `activate()` has read the
+ * real version out of the manifest — the request would then honestly announce
+ * a version that is merely the placeholder. Reading it per request costs a
+ * string concatenation and is always current.
+ *
+ * The server stores this string on the tenant that a call creates
+ * (tenants.signup_client), which is the only way to tell an own self-test
+ * apart from a stranger's first install.
+ */
+function userAgent(): string {
+  const fromManifest = (vscode.extensions.getExtension(EXTENSION_ID)?.packageJSON as { version?: string } | undefined)?.version;
+  return `cachly-vscode/${fromManifest ?? extensionVersion}`;
+}
 
 function apiGet(url: string, apiKey: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const mod = new URL(url).protocol === 'https:' ? https : http;
     const req = mod.get(url, {
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json', 'User-Agent': USER_AGENT },
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json', 'User-Agent': userAgent() },
       timeout: 5000,
     }, (res) => {
       let data = '';
@@ -2764,7 +2793,7 @@ function apiPost(url: string, apiKey: string, body: Record<string, unknown>): Pr
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
-        'User-Agent': USER_AGENT,
+        'User-Agent': userAgent(),
         'Accept': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
       },
@@ -2825,7 +2854,7 @@ function apiPostAnon(url: string, body: Record<string, unknown>): Promise<unknow
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': USER_AGENT,
+        'User-Agent': userAgent(),
       },
       timeout: 8000,
     }, (res) => {
