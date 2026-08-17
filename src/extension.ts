@@ -45,6 +45,10 @@ interface MemoryData {
   total_recall_count?: number;
   recall_limit?: number;
   goodwill_message?: string;
+  // Ein Satz vom Server an den Menschen. Der Kanal existiert seit dem 13.08.2026
+  // und wurde bis zum 17.08. NUR vom MCP-Server angezeigt — wer cachly ueber
+  // dieses Panel benutzt und nicht ueber einen Agenten, sah ihn nie.
+  notice?: string;
   iq_boost_pct?: number;
   team_authors?: string[];
   crystal?: { summary: string; patterns_hit: number; created_at: string };
@@ -70,6 +74,7 @@ interface BrainHealth {
   crystal: { summary: string; patterns_hit: number; created_at: string } | null;
   pendingLessons: number; // locally queued offline, not yet synced
   goodwillMessage: string | null;
+  notice: string | null;
   insights: BrainInsights | null;
 }
 
@@ -814,6 +819,7 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     iqBoostPct: 0, teamAuthors: [], crystal: null,
     pendingLessons: extensionContext?.globalState.get<OfflineLesson[]>(OFFLINE_QUEUE_KEY, []).length ?? 0,
     goodwillMessage: null,
+    notice: null,
     insights: null,
   };
 
@@ -868,6 +874,7 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
       ?? result.topLessons.reduce((s, l) => s + (l.recall_count ?? 0), 0);
     result.recallLimit = memData.recall_limit ?? -1;
     result.goodwillMessage = memData.goodwill_message || null;
+    result.notice = memData.notice || null;
     result.estimatedTokensSaved = result.totalRecalls * TOKENS_PER_RECALL;
     result.estimatedCostSaved = result.estimatedTokensSaved * COST_PER_TOKEN;
     result.iqBoostPct = memData.iq_boost_pct ?? 0;
@@ -2932,6 +2939,11 @@ async function handleBrainPanelMessage(msg: { cmd?: string; text?: string } | un
       case 'upgrade':
         await vscode.env.openExternal(vscode.Uri.parse('https://cachly.dev/billing'));
         break;
+      // Der Knopf am Server-Hinweis. Er ruft den Befehl, den es ohnehin gibt —
+      // ein zweiter Weg zum Verknuepfen waere eine zweite Wahrheit.
+      case 'link':
+        await vscode.commands.executeCommand('cachly.linkAccount');
+        break;
       case 'setAuthor': {
         const current = vscode.workspace.getConfiguration('cachly').get<string>('authorName') ?? '';
         const name = await vscode.window.showInputBox({
@@ -3000,6 +3012,11 @@ function buildHealthHtml(health: BrainHealth): string {
   }
   if (health.pendingLessons > 0) {
     banners.push(`<div class="banner warn">⏳ <strong>${health.pendingLessons} lesson${health.pendingLessons === 1 ? '' : 's'} saved offline</strong> — not yet counted below. They sync automatically once the Brain is reachable.</div>`);
+  }
+  // Der Satz vom Server steht VOR der Kulanz-Meldung: Er betrifft im Zweifel
+  // den Zugang zum eigenen Gedaechtnis, die Kulanz nur ein Kontingent.
+  if (health.notice) {
+    banners.push(`<div class="banner warn">${esc(health.notice)} <button class="mini" data-cmd="link">Link account</button></div>`);
   }
   if (health.goodwillMessage) {
     banners.push(`<div class="banner info">${esc(health.goodwillMessage)}</div>`);
