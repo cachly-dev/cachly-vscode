@@ -2679,11 +2679,25 @@ class HttpError extends Error {
   }
 }
 
+// ── HTTP helpers ──
+
+/**
+ * Every request carries an honest User-Agent.
+ *
+ * Node's raw https module sends NONE by default. Today that happens to pass
+ * our Cloudflare, but the WAF already bans other library signatures
+ * (Python-urllib gets 403 error 1010, measured 2026-08-16) — one rule change
+ * away from every installed panel going "Unreachable" at once, with nothing
+ * in any log naming the extension. An identified client can be allowlisted
+ * and found in access logs; an anonymous one can only be debugged by outage.
+ */
+const USER_AGENT = `cachly-vscode/${(() => { try { return (vscode.extensions.getExtension('cachly.cachly-brain')?.packageJSON as { version?: string })?.version ?? '0'; } catch { return '0'; } })()}`;
+
 function apiGet(url: string, apiKey: string): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const mod = new URL(url).protocol === 'https:' ? https : http;
     const req = mod.get(url, {
-      headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json' },
+      headers: { 'Authorization': `Bearer ${apiKey}`, 'Accept': 'application/json', 'User-Agent': USER_AGENT },
       timeout: 5000,
     }, (res) => {
       let data = '';
@@ -2710,6 +2724,7 @@ function apiPost(url: string, apiKey: string, body: Record<string, unknown>): Pr
       headers: {
         'Authorization': `Bearer ${apiKey}`,
         'Content-Type': 'application/json',
+        'User-Agent': USER_AGENT,
         'Accept': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
       },
@@ -2770,6 +2785,7 @@ function apiPostAnon(url: string, body: Record<string, unknown>): Promise<unknow
         'Content-Type': 'application/json',
         'Accept': 'application/json',
         'Content-Length': Buffer.byteLength(payload),
+        'User-Agent': USER_AGENT,
       },
       timeout: 8000,
     }, (res) => {
