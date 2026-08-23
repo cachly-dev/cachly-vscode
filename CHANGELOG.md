@@ -2,6 +2,25 @@
 
 ---
 
+## [0.12.5] – 2026-08-23 — *"The server could talk to agents, not to you"*
+
+### Fixed
+- **A message from the server now reaches the panel, not just the agent.** The
+  server-side `notice` channel has existed since 13 August 2026, but until now
+  only the MCP server rendered it. Anyone who uses cachly through this panel
+  instead of through an agent never saw a word — including notices about access
+  to their own memory. The banner now appears above the grace-period message,
+  because access to your memory outranks a quota, and carries the same "Link
+  account" button as the existing command rather than a second path to the same
+  place.
+
+**Note on the gap:** the code for this shipped on 17 August; the marketplace
+build stayed on 0.12.4 from 14 August. Six days of a finished fix reaching
+nobody. Same class as the MCP server that ran 0.10.128 while 0.10.129 sat on
+npm — a build that is done is not a build that is delivered.
+
+---
+
 ## [0.12.4] – 2026-08-14 — *"We should be able to reach you"*
 
 ### Added
