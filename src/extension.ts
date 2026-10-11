@@ -476,12 +476,12 @@ export function activate(context: vscode.ExtensionContext) {
       const daysLeft = Math.ceil((expiresDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
       if (daysLeft <= 0) {
         void vscode.window.showWarningMessage(
-          '🧠 Cachly Brain trial has expired. Link your account to continue.',
+          '🧠 Cachly: the 14-day Dev tier has ended. Your test Brain keeps running on the free tier with the same key. Linking an account creates a new Brain; lessons stay in the test Brain for now.',
           'Link Account',
         ).then((choice) => { if (choice === 'Link Account') void linkAccountCommand(); });
       } else if (daysLeft <= 7) {
         void vscode.window.showInformationMessage(
-          `🧠 Cachly Brain trial: ${daysLeft} day${daysLeft === 1 ? '' : 's'} left. Link your account to keep data.`,
+          `🧠 Cachly: ${daysLeft} day${daysLeft === 1 ? '' : 's'} of Dev tier left. Afterwards your test Brain keeps running on the free tier with the same key.`,
           'Link Account', 'Later',
         ).then((choice) => { if (choice === 'Link Account') void linkAccountCommand(); });
       }
@@ -1860,7 +1860,7 @@ async function setupAICommand() {
 
       // Show "Link Account" banner — clicking upgrades the trial to a real account
       void vscode.window.showInformationMessage(
-        '🧠 Cachly Brain: 14-day free trial started! Link your account to keep data permanently.',
+        '🧠 Cachly Brain: test Brain started on EU servers. 14 days Dev tier, then the free tier with the same key.',
         'Link Account',
         'Later',
       ).then(async (choice) => {
@@ -2005,7 +2005,7 @@ async function linkAccountCommand() {
   await config.update('apiKey', obtained, vscode.ConfigurationTarget.Global);
   await config.update('trialExpiresAt', undefined, vscode.ConfigurationTarget.Global);
   trackVSCodeEvent('vscode_account_linked', { apiKey: obtained, once: true });
-  vscode.window.showInformationMessage('🧠 Cachly Brain: account linked! Your data is now permanent.');
+  vscode.window.showInformationMessage('🧠 Cachly: account linked. Your account has its own Brain; lessons from the test Brain stay in the test Brain for now.');
 }
 
 // Clears all stored auth state (apiKey + instanceId) so the next setup starts fresh.
