@@ -2,6 +2,25 @@
 
 ---
 
+## [0.12.6] – 2026-10-11 — *"Copilot gets cachly, and the messages tell the truth"*
+
+### Added
+- **Copilot finds cachly in more setups.** VS Code reads `.mcp.json` since
+  1.118. On older versions, or when the opened folder sits below the git root,
+  Copilot never saw cachly. The extension now also writes `.vscode/mcp.json`
+  with `servers.cachly`; the key stays in `~/.cachly/vscode-mcp.env`
+  (`envFile`), not in the project file. After setup the message says what is
+  true: Copilot picks cachly up from the next chat message, Claude Code from
+  its next session.
+
+### Fixed
+- **"Link Account" no longer claims your data is now permanent.** Linking
+  creates a Brain for your account; lessons from the test Brain stay in the
+  test Brain for now. The message says so.
+- **The end of the 14 days no longer says the trial has expired.** Your test
+  Brain keeps running on the free tier with the same key; the reminder now
+  says exactly that.
+
 ## [0.12.5] – 2026-08-23 — *"The server could talk to agents, not to you"*
 
 ### Fixed
