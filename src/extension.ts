@@ -13,6 +13,7 @@ import {
   CLS_HOOK_VERSION,
   type BrainStatus,
 } from './lib/config';
+import { bindeCopilotAn, verbindungsSatz, type CopilotAnbindung } from './lib/copilotMcp';
 import {
   buildAmbientHook,
   mergeAmbientSettings,
@@ -1698,21 +1699,22 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
   }
 
   // ── 5. Write workspace files (.mcp.json, copilot-instructions.md, settings) ──
+  let copilot: CopilotAnbindung | undefined;
   if (instanceId) {
-    try { await writeWorkspaceFiles(BASE_URL, apiKey, instanceId); } catch { /* non-fatal */ }
+    try { copilot = await writeWorkspaceFiles(BASE_URL, apiKey, instanceId); } catch { /* non-fatal */ }
   }
 
   // ── 6. Track + notify ─────────────────────────────────────────────────────
   if (githubLogin) {
     trackVSCodeEvent('vscode_github_linked', { apiKey, instanceId, once: true });
     void vscode.window.showInformationMessage(
-      `🧠 Brain connected via GitHub @${githubLogin} — permanent memory active! Restart your AI tool to begin.`,
+      `🧠 Brain connected via GitHub @${githubLogin} — permanent memory active! ${verbindungsSatz(copilot)}`,
       'Show Brain', 'Dismiss',
     ).then(a => { if (a === 'Show Brain') showBrainHealthPanel(); });
   } else if (isTrial) {
     trackVSCodeEvent('vscode_trial_started', { apiKey, instanceId, once: true });
     void vscode.window.showInformationMessage(
-      '🧠 14-day free Brain trial started! Restart your AI tool (Copilot, Claude, Cursor…) to activate memory.',
+      `🧠 14-day free Brain trial started! ${verbindungsSatz(copilot)}`,
       'Link Account', 'Later',
     ).then(async (choice) => {
       if (choice === 'Link Account') await linkAccountCommand();
@@ -2165,8 +2167,9 @@ async function finishSetup(token: string, baseUrl: string) {
     );
   }
 
-  // Write workspace configs (.mcp.json, copilot-instructions.md, .vscode/settings.json)
-  try { await writeWorkspaceFiles(baseUrl, token, instanceId); } catch { /* non-fatal */ }
+  // Write workspace configs (.mcp.json, .vscode/mcp.json, copilot-instructions.md, .vscode/settings.json)
+  let copilot: CopilotAnbindung | undefined;
+  try { copilot = await writeWorkspaceFiles(baseUrl, token, instanceId); } catch { /* non-fatal */ }
 
   await config.update('instanceId', instanceId, vscode.ConfigurationTarget.Workspace);
 
@@ -2174,7 +2177,7 @@ async function finishSetup(token: string, baseUrl: string) {
 
   if (!instanceStillProvisioning) {
     const action = await vscode.window.showInformationMessage(
-      `🧠 Brain connected! Your AI now has persistent memory. Restart your AI tool to activate.`,
+      `🧠 Brain connected! Your AI now has persistent memory. ${verbindungsSatz(copilot)}`,
       'Show Brain', 'Dismiss',
     );
     if (action === 'Show Brain') showBrainHealthPanel();
@@ -2247,12 +2250,12 @@ async function writeFileContent(filePath: string, content: string): Promise<void
  * Called from silentAutoSetup (background), finishSetup (manual wizard), and
  * checkMcpSetupAndNudge (catch-all safety net).
  */
-async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: string): Promise<void> {
+async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: string): Promise<CopilotAnbindung | undefined> {
   const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath
     ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const gitRoot = activeFile ? await findGitRoot(activeFile) : undefined;
   const targetRoot = gitRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!targetRoot) return;
+  if (!targetRoot) return { weg: 'kein-ordner' };
 
   // .mcp.json — merge cachly entry; preserve all other MCP servers the user has configured
   const mcpPath = path.join(targetRoot, '.mcp.json');
@@ -2267,6 +2270,18 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
     env: { CACHLY_API_URL: baseUrl, CACHLY_JWT: apiKey, CACHLY_BRAIN_INSTANCE_ID: instanceId },
   };
   await writeFileContent(mcpPath, JSON.stringify(mcpJson, null, 2));
+
+  // .vscode/mcp.json — only where Copilot cannot see .mcp.json (see lib/copilotMcp.ts).
+  let copilot: CopilotAnbindung | undefined;
+  try {
+    copilot = await bindeCopilotAn({
+      arbeitsordner: (activeFile && vscode.workspace.getWorkspaceFolder(vscode.Uri.file(activeFile))?.uri.fsPath)
+        || vscode.workspace.workspaceFolders?.[0]?.uri.fsPath,
+      mcpJsonOrdner: targetRoot, vscodeVersion: vscode.version, appName: vscode.env.appName,
+      apiKey, instanceId, apiUrl: baseUrl,
+    });
+    log('copilot mcp', copilot);
+  } catch (e) { log('copilot mcp: .vscode/mcp.json not written', (e as Error).message); }
 
   // Instruction/rules files — write the SAME marked block to every AI tool's
   // convention so a user on any harness gets the full lifecycle protocol:
@@ -2381,6 +2396,7 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
   const m = extensionContext.globalState.get<Record<string, string>>('gitRootInstanceMap', {});
   m[targetRoot] = instanceId;
   void extensionContext.globalState.update('gitRootInstanceMap', m);
+  return copilot;
 }
 
 /**
@@ -3345,9 +3361,9 @@ async function checkMcpSetupAndNudge(context: vscode.ExtensionContext): Promise<
   const baseUrl2 = apiBaseUrl(config);
   if (instanceId2) {
     try {
-      await writeWorkspaceFiles(baseUrl2, apiKey, instanceId2);
+      const copilot = await writeWorkspaceFiles(baseUrl2, apiKey, instanceId2);
       void vscode.window.showInformationMessage(
-        '🧠 cachly: MCP wired to your AI editor! Restart Copilot, Claude Code, or Cursor to activate Brain memory.',
+        `🧠 cachly: MCP wired to your AI editor! ${verbindungsSatz(copilot)}`,
         'Show Brain',
       ).then(a => { if (a === 'Show Brain') showBrainHealthPanel(); });
       return;
