@@ -15,6 +15,10 @@ import {
 } from './lib/config';
 import { bindeCopilotAn, verbindungsSatz, type CopilotAnbindung } from './lib/copilotMcp';
 import {
+  pruefeSchluesselQuelle, pruefeApiAdresse, starteKeycloakAnmeldung, warteAufKeycloakAnmeldung, uebernimm, brainImKonto,
+  erfolgsText, fehlerText, type Post, type Get,
+} from './lib/uebernahme';
+import {
   buildAmbientHook,
   mergeAmbientSettings,
   AMBIENT_SCRIPT_NAMES,
@@ -476,7 +480,7 @@ export function activate(context: vscode.ExtensionContext) {
       const daysLeft = Math.ceil((expiresDate.getTime() - Date.now()) / (1000 * 60 * 60 * 24));
       if (daysLeft <= 0) {
         void vscode.window.showWarningMessage(
-          '🧠 Cachly: the 14-day Dev tier has ended. Your test Brain keeps running on the free tier with the same key. Linking an account creates a new Brain; lessons stay in the test Brain for now.',
+          '🧠 Cachly: the 14-day Dev tier has ended. Your test Brain keeps running on the free tier with the same key. Link Account moves this Brain and its lessons into your cachly account.',
           'Link Account',
         ).then((choice) => { if (choice === 'Link Account') void linkAccountCommand(); });
       } else if (daysLeft <= 7) {
@@ -1955,57 +1959,101 @@ async function setupAICommand() {
   await finishSetup(token, BASE_URL);
 }
 
-// ── Link Account command — upgrades a trial to a real account via Device Flow ─
+// ── Link Account — moves the test Brain into the signed-in account ───────────
+//
+// Bis zum 11.10.2026 meldete dieser Befehl neu an und legte ein NEUES Brain an;
+// die Lektionen blieben im Test-Brain. Jetzt zieht er das Test-Brain um
+// (lib/uebernahme.ts, POST /auth/trial/claim): Anmeldung im Browser bei
+// Keycloak, dann EIN Aufruf mit Anmeldung UND Test-Schluessel. Der Server
+// widerruft jeden Test-Schluessel und gibt einen neuen zurueck, der hier und
+// in den Projekt-Configs den alten ersetzt.
 async function linkAccountCommand() {
   const config = vscode.workspace.getConfiguration('cachly');
-  const BASE_URL = apiBaseUrl(config);
+  // Adresse und Schluessel nur aus den Benutzer-Einstellungen — ein fremder
+  // Ordner kann beide in .vscode/settings.json setzen (lib/uebernahme.ts).
+  const adresse = pruefeApiAdresse(config.inspect<string>('apiUrl'));
+  if (adresse.art === 'arbeitsbereich') {
+    void vscode.window.showWarningMessage(
+      'Cachly: this folder sets its own cachly.apiUrl in .vscode/settings.json. For your safety, Link Account '
+      + 'only sends your sign-in to the address in your user settings. Remove cachly.apiUrl from the folder settings and try again.',
+    );
+    return;
+  }
+  const BASE_URL = adresse.url;
 
-  type DeviceResp = { device_code: string; user_code: string; verification_uri: string };
-  let deviceResp: DeviceResp | null = null;
+  const quelle = pruefeSchluesselQuelle(config.inspect<string>('apiKey'));
+  if (quelle.art === 'kein-schluessel') {
+    void vscode.commands.executeCommand('cachly.setup');
+    return;
+  }
+  if (quelle.art === 'konto') {
+    void vscode.window.showInformationMessage('🧠 Cachly: this Brain already belongs to your account. There is nothing to link.');
+    return;
+  }
+  if (quelle.art === 'arbeitsbereich') {
+    void vscode.window.showWarningMessage(
+      'Cachly: this folder sets its own cachly.apiKey in .vscode/settings.json. For your safety, Link Account only moves '
+      + 'a test Brain whose key is in your user settings. Remove cachly.apiKey from the folder settings and try again.',
+    );
+    return;
+  }
+  const testSchluessel = quelle.schluessel;
+
+  // 1. Anmeldung bei Keycloak im Browser.
+  let anmeldeToken: string | null = null;
   try {
-    deviceResp = await apiPostAnon(`${BASE_URL}/auth/device`, {}) as DeviceResp | null;
-  } catch { /* show manual fallback */ }
-
-  if (!deviceResp?.device_code) {
-    void vscode.env.openExternal(vscode.Uri.parse('https://cachly.dev/dashboard'));
+    const code = await starteKeycloakAnmeldung(httpPost);
+    void vscode.env.openExternal(vscode.Uri.parse(code.adresse));
+    anmeldeToken = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: `🧠 Cachly: sign in in your browser and confirm code ${code.userCode} to move your test Brain into your account`,
+        cancellable: true,
+      },
+      (_progress, cancelToken) => warteAufKeycloakAnmeldung(httpPost, code, {
+        abgebrochen: () => cancelToken.isCancellationRequested,
+      }),
+    );
+  } catch (e) {
+    void vscode.window.showWarningMessage(`Cachly: ${fehlerText(e)}`);
+    return;
+  }
+  if (!anmeldeToken) {
+    void vscode.window.showWarningMessage('Cachly: sign-in cancelled. Nothing was changed.');
     return;
   }
 
-  const approvalUrl = `${deviceResp.verification_uri}?code=${deviceResp.user_code}`;
-  void vscode.env.openExternal(vscode.Uri.parse(approvalUrl));
-
-  const obtained = await vscode.window.withProgress(
-    {
-      location: vscode.ProgressLocation.Notification,
-      title: `🧠 Cachly: enter code  ${deviceResp.user_code}  at cachly.dev/device to link your account`,
-      cancellable: true,
-    },
-    async (_progress, cancelToken) => {
-      const { device_code } = deviceResp!;
-      for (let i = 0; i < 120; i++) {
-        if (cancelToken.isCancellationRequested) return null;
-        await new Promise<void>((r) => setTimeout(r, 5000));
-        try {
-          const poll = await apiPostAnon(`${BASE_URL}/auth/device/token`, { device_code }) as
-            { access_token?: string; error?: string } | null;
-          if (poll?.access_token) return poll.access_token;
-          if (poll?.error === 'expired_token' || poll?.error === 'access_denied') return null;
-        } catch { /* keep polling */ }
-      }
-      return null;
-    },
-  );
-
-  if (!obtained) {
-    vscode.window.showWarningMessage('Cachly: account linking cancelled or timed out.');
+  // 2. Uebernahme: Anmeldung und Test-Schluessel im selben Aufruf.
+  let erg;
+  try {
+    const token = anmeldeToken;
+    erg = await vscode.window.withProgress(
+      {
+        location: vscode.ProgressLocation.Notification,
+        title: '🧠 Cachly: moving your test Brain into your account — it restarts once, up to a minute…',
+      },
+      () => uebernimm(httpPost, BASE_URL, token, testSchluessel, userAgent()),
+    );
+  } catch (e) {
+    void vscode.window.showWarningMessage(`Cachly: ${fehlerText(e)}`);
     return;
   }
 
-  // Replace trial key with real account key
-  await config.update('apiKey', obtained, vscode.ConfigurationTarget.Global);
+  // 3. Der neue Schluessel ersetzt den widerrufenen — hier und in den Projekt-Configs.
+  await config.update('apiKey', erg.apiKey, vscode.ConfigurationTarget.Global);
   await config.update('trialExpiresAt', undefined, vscode.ConfigurationTarget.Global);
-  trackVSCodeEvent('vscode_account_linked', { apiKey: obtained, once: true });
-  vscode.window.showInformationMessage('🧠 Cachly: account linked. Your account has its own Brain; lessons from the test Brain stay in the test Brain for now.');
+  if (config.inspect<string>('instanceId')?.globalValue) {
+    await config.update('instanceId', erg.instanceId, vscode.ConfigurationTarget.Global);
+  }
+  let copilot: CopilotAnbindung | undefined;
+  try { copilot = await writeWorkspaceFiles(BASE_URL, erg.apiKey, erg.instanceId); } catch { /* non-fatal */ }
+  trackVSCodeEvent('vscode_account_linked', { apiKey: erg.apiKey, instanceId: erg.instanceId, once: true });
+
+  // 4. Erst nachsehen, dann "Lessons kept" sagen.
+  const bestaetigt = await brainImKonto(httpGet, BASE_URL, erg.apiKey, erg.instanceId);
+  void vscode.window.showInformationMessage(`🧠 Cachly: ${erfolgsText(erg, bestaetigt)} ${verbindungsSatz(copilot)}`);
+  startRefreshLoop();
+  void updateStatusBar();
 }
 
 // Clears all stored auth state (apiKey + instanceId) so the next setup starts fresh.
@@ -2838,6 +2886,50 @@ function apiPost(url: string, apiKey: string, body: Record<string, unknown>): Pr
     req.end();
   });
 }
+
+/**
+ * POST, der JEDEN Status zurueckgibt statt bei Nicht-2xx zu werfen — fuer
+ * Link Account (lib/uebernahme.ts), das Absagen nach ihrem Grund unterscheidet.
+ * Bei einem Formular-Koerper kommt der Content-Type aus den Koepfen.
+ */
+const httpPost: Post = (url, headers, body) => new Promise((resolve, reject) => {
+  const mod = new URL(url).protocol === 'https:' ? https : http;
+  const req = mod.request(url, {
+    method: 'POST',
+    headers: { 'User-Agent': userAgent(), Accept: 'application/json', ...headers, 'Content-Length': Buffer.byteLength(body) },
+    // Link Account: Der Server wartet bis zu 60 s, bis das Brain nach dem
+    // Neustart sein neues Passwort bestaetigt.
+    timeout: 150_000,
+  }, (res) => {
+    let data = '';
+    res.on('data', (c) => data += c);
+    res.on('end', () => {
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(data); } catch { /* empty/non-json body */ }
+      resolve({ status: res.statusCode ?? 0, body: parsed });
+    });
+  });
+  req.on('error', reject);
+  req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+  req.write(body);
+  req.end();
+});
+
+/** GET mit Status, Gegenstueck zu httpPost. */
+const httpGet: Get = (url, headers) => new Promise((resolve, reject) => {
+  const mod = new URL(url).protocol === 'https:' ? https : http;
+  const req = mod.get(url, { headers: { 'User-Agent': userAgent(), ...headers }, timeout: 10_000 }, (res) => {
+    let data = '';
+    res.on('data', (c) => data += c);
+    res.on('end', () => {
+      let parsed: unknown = null;
+      try { parsed = JSON.parse(data); } catch { /* empty/non-json body */ }
+      resolve({ status: res.statusCode ?? 0, body: parsed });
+    });
+  });
+  req.on('error', reject);
+  req.on('timeout', () => { req.destroy(); reject(new Error('timeout')); });
+});
 
 // ── Extension Telemetry ─────────────────────────────────────────────────────
 // Fire-and-forget; never throws; does not block the calling action.
