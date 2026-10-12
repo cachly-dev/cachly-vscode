@@ -190,9 +190,11 @@ describe('buildClsPostCommitHook', () => {
     expect(hook.trimEnd().endsWith('exit 0')).toBe(true);
   });
 
-  it('embeds the API key only when provided', () => {
-    expect(buildClsPostCommitHook('i', 'cky_live_x')).toContain('export CACHLY_JWT="cky_live_x"');
+  it('embeds no API key (v3): a key in .git/hooks/post-commit is a key in the project folder', () => {
+    expect(CLS_HOOK_VERSION).toBe('v3');
     expect(buildClsPostCommitHook('i')).not.toContain('CACHLY_JWT');
+    // A caller still passing the old second argument must not get a key written.
+    expect((buildClsPostCommitHook as (i: string, k?: string) => string)('i', 'cky_live_x')).not.toContain('cky_live_x');
   });
 
   it('passes commit data via env (apostrophe-safe), not JS-source interpolation', () => {

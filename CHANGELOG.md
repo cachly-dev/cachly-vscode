@@ -2,6 +2,48 @@
 
 ---
 
+## [0.12.7] – 2026-10-12 — *"Your key stays in your home folder, and a new folder no longer looks dead"*
+
+### Security
+- **The API key is no longer written into your project.** Until 0.12.6 the
+  extension put it in clear text into `.mcp.json` and into the four files under
+  `.claude/hooks/` (and into `.git/hooks/post-commit`). None of that was in
+  `.gitignore`, so `git add .` checked the key in; in a public repository it
+  ends up on GitHub. Found in a real VS Code run on 12 October 2026: 14 new
+  files, the key in five of them.
+  Now the key lives in `~/.cachly/credentials.json`, owner-only. The MCP server
+  and the hooks read it from there at every start. The project files hold only
+  the API address and the Brain id. The hooks are the same ones `setup`
+  writes (v5, with the hook bundle next to them), so they also stopped starting
+  `npx` for every prompt.
+- **Projects from earlier versions are cleaned up.** When the extension finds
+  its own key in `.mcp.json`, in `.vscode/mcp.json`, in a `.claude/hooks` script
+  or in the git post-commit hook, it writes the file again without the key,
+  puts the key in your home folder first, and tells you once:
+  *"Your cachly key was stored in project files. It has been moved to your home
+  folder. If you committed those files, rotate the key at cachly.dev."*
+  Other MCP servers, other hooks and every file with a key the extension does
+  not know stay as they are. The message appears only when a key was found.
+- If `~/.cachly/credentials.json` already holds a different key (from the
+  terminal setup, the Claude Code plugin or another editor), the extension does
+  not overwrite it. It asks whether to use its own key, and still writes no key
+  into the project.
+
+### Fixed
+- **A newly opened folder no longer looks dead.** VS Code opens a new folder in
+  Restricted Mode, and the extension did not say it needs trust, so it stayed
+  switched off: no log entry, no account, no file, no hint. Now it declares
+  limited support for untrusted folders. In Restricted Mode it shows
+  *"cachly: trust this folder to connect"* in the status bar and one message
+  with a button that opens the trust dialog. It writes no file, creates no
+  account and contacts no server until you trust the folder; then the usual
+  setup runs by itself.
+
+**Not published yet:** the marketplace publish needs a valid `VSCE_PAT`. Until
+it is renewed, users keep 0.12.5.
+
+---
+
 ## [0.12.6] – 2026-10-11 — *"Copilot gets cachly, and the messages tell the truth"*
 
 ### Added

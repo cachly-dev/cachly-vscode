@@ -2,7 +2,7 @@
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
   "description": "ChatGPT and Claude remember your conversations — cachly remembers your codebase. The bug you fixed, why you chose Postgres, the deploy step that always breaks. Free trial without an account.",
-  "version": "0.12.6",
+  "version": "0.12.7",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
   "galleryBanner": {
@@ -37,6 +37,15 @@
   "activationEvents": [
     "onStartupFinished"
   ],
+  "capabilities": {
+    "untrustedWorkspaces": {
+      "supported": "limited",
+      "description": "In Restricted Mode cachly only shows a status bar item and one notice. It writes no files, creates no account and contacts no server until you trust the folder.",
+      "restrictedConfigurations": [
+        "cachly.apiUrl"
+      ]
+    }
+  },
   "main": "./dist/extension.js",
   "contributes": {
     "commands": [
@@ -267,6 +276,9 @@
     "watch": "tsc -watch -p ./",
     "test": "vitest run",
     "test:watch": "vitest",
+    "hooks:sync": "node scripts/buendel-kopieren.mjs",
+    "hooks:pruefen": "node scripts/buendel-kopieren.mjs --pruefen",
+    "prepackage": "node scripts/buendel-kopieren.mjs",
     "package": "node -r ./scripts/polyfill.js node_modules/@vscode/vsce/vsce package --no-dependencies",
     "publish": "node -r ./scripts/polyfill.js node_modules/@vscode/vsce/vsce publish --pat $VSCE_PAT"
   },

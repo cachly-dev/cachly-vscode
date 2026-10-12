@@ -110,13 +110,15 @@ export function instanceUrl(baseUrl: string, instanceId: string): string {
  *   • passes message/sha/files to node via ENVIRONMENT VARIABLES (no JS-source
  *     interpolation → no quoting/injection breakage), and
  *   • hands the JSON to the CLI via execFileSync (no shell re-parsing).
- *   • embeds CACHLY_JWT only when provided so `cls-ingest` can authenticate.
+ *   • embeds NO key (v3, 12.10.2026). v2 wrote `export CACHLY_JWT="…"` into
+ *     .git/hooks/post-commit, a file inside the project folder. `cls-ingest`
+ *     resolves its key at run time (env, then ~/.cachly/credentials.json).
  *
  * Kept in sync with sdk/mcp/src/cls-hook.ts.
  */
-export const CLS_HOOK_VERSION = 'v2';
+export const CLS_HOOK_VERSION = 'v3';
 
-export function buildClsPostCommitHook(instanceId: string, apiKey?: string): string {
+export function buildClsPostCommitHook(instanceId: string): string {
   const nodeProgram =
     "try{" +
     "var p={instance_id:process.env.CACHLY_BRAIN_INSTANCE_ID,source:'git_commit'," +
@@ -130,7 +132,6 @@ export function buildClsPostCommitHook(instanceId: string, apiKey?: string): str
     `# cachly CLS — Continuous Learning Stream ${CLS_HOOK_VERSION} (installed by Cachly VS Code extension)`,
     `# Runs silently on every commit to keep your brain up to date.`,
     `export CACHLY_BRAIN_INSTANCE_ID="${instanceId}"`,
-    ...(apiKey ? [`export CACHLY_JWT="${apiKey}"`] : []),
     `CLS_SHA=$(git rev-parse HEAD 2>/dev/null || echo "")`,
     `CLS_MSG=$(git log -1 --pretty=%B 2>/dev/null | head -1 | cut -c1-200)`,
     `CLS_FILES=$(git diff-tree --no-commit-id -r --name-only HEAD 2>/dev/null | tr '\\n' ',' | sed 's/,$//')`,

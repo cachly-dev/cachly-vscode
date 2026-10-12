@@ -9,8 +9,6 @@ import {
   isValidApiKey,
   isValidInstanceId,
   parseJsonc,
-  buildClsPostCommitHook,
-  CLS_HOOK_VERSION,
   type BrainStatus,
 } from './lib/config';
 import { bindeCopilotAn, verbindungsSatz, type CopilotAnbindung } from './lib/copilotMcp';
@@ -18,15 +16,16 @@ import {
   pruefeSchluesselQuelle, pruefeApiAdresse, starteKeycloakAnmeldung, warteAufKeycloakAnmeldung, uebernimm, brainImKonto,
   erfolgsText, fehlerText, type Post, type Get,
 } from './lib/uebernahme';
+import { HOOK_BUENDEL } from './lib/ambient';
+import { fuegeInMcpJsonEin } from './lib/mcpJson';
+import { installiereAmbientHooks, installiereClsHook } from './lib/projektHooks';
+import { legeSchluesselImHeimAb, schluesselFingerabdruck, type HeimAblage } from './lib/schluessel';
+import { bereinigeAltbestand, type AltbestandErgebnis } from './lib/altbestand';
 import {
-  buildAmbientHook,
-  mergeAmbientSettings,
-  AMBIENT_SCRIPT_NAMES,
-  AMBIENT_HOOK_VERSION,
-  type AmbientHookEvent,
-  type AmbientHookPaths,
-  type ClaudeSettingsLike,
-} from './lib/ambient';
+  VERTRAUEN_BEFEHL, VERTRAUEN_STATUSLEISTE, VERTRAUEN_STATUSLEISTE_HILFE, VERTRAUEN_MELDUNG, VERTRAUEN_KNOPF,
+  VERTRAUEN_CHAT_ANTWORT, ALTBESTAND_KNOPF, altbestandText, HEIM_KONFLIKT_MELDUNG, HEIM_KONFLIKT_ERSETZEN,
+  HEIM_KONFLIKT_BEHALTEN, heimFehlerText,
+} from './lib/vertrauen';
 
 interface TopLesson {
   topic: string;
@@ -369,6 +368,88 @@ export function activate(context: vscode.ExtensionContext) {
   context.subscriptions.push(getOutputChannel());
   log(`Cachly Brain activated (v${extensionVersion})`);
 
+  // Workspace Trust. Ein neu geoeffneter Ordner ist zuerst NICHT vertraut. Dann
+  // laeuft nur der harmlose Teil (Statusleiste, eine Meldung mit Knopf); alles,
+  // was Dateien schreibt, ein Konto anlegt oder das Netz anspricht, wartet auf
+  // das Vertrauen. Siehe lib/vertrauen.ts.
+  if (!vscode.workspace.isTrusted) {
+    activateRestricted(context);
+    return;
+  }
+  activateFull(context);
+}
+
+// ── Workspace Trust: eingeschraenkter Modus ──────────────────────────────────
+
+let restrictedAktiv: vscode.Disposable[] = [];
+let vertrauenMeldungGezeigt = false;
+
+function zeigeVertrauensMeldung(): void {
+  void vscode.window.showInformationMessage(VERTRAUEN_MELDUNG, VERTRAUEN_KNOPF).then((wahl) => {
+    if (wahl === VERTRAUEN_KNOPF) void vscode.commands.executeCommand(VERTRAUEN_BEFEHL);
+  });
+}
+
+/**
+ * Eingeschraenkter Modus: kein Schreiben, kein Netz, kein Konto. Nur
+ *  - ein Eintrag in der Statusleiste, der den Vertrauensdialog oeffnet,
+ *  - eine einmalige Meldung mit demselben Knopf,
+ *  - Platzhalter fuer alle Befehle (sonst hiesse es "Befehl nicht gefunden")
+ *    und fuer @cachly im Chat,
+ * und ein Zuhoerer, der nach dem Vertrauen den vollen Weg startet.
+ */
+function activateRestricted(context: vscode.ExtensionContext): void {
+  log('Restricted Mode: folder is not trusted — cachly waits (no files, no account, no network)');
+
+  const eintrag = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
+  eintrag.text = VERTRAUEN_STATUSLEISTE;
+  eintrag.tooltip = VERTRAUEN_STATUSLEISTE_HILFE;
+  eintrag.command = VERTRAUEN_BEFEHL;
+  eintrag.show();
+  restrictedAktiv.push(eintrag);
+
+  const contributed = ((context.extension?.packageJSON?.contributes?.commands ?? []) as Array<{ command?: string }>)
+    .map((c) => c.command)
+    .filter((c): c is string => typeof c === 'string');
+  for (const id of new Set([...contributed, 'cachly.linkAccount'])) {
+    restrictedAktiv.push(vscode.commands.registerCommand(id, zeigeVertrauensMeldung));
+  }
+
+  const chatApi = (vscode as unknown as { chat?: typeof vscode.chat }).chat;
+  if (chatApi?.createChatParticipant) {
+    try {
+      const teilnehmer = chatApi.createChatParticipant('cachly.brain', (_request, _ctx, stream) => {
+        stream.markdown(VERTRAUEN_CHAT_ANTWORT);
+        stream.button({ command: VERTRAUEN_BEFEHL, title: VERTRAUEN_KNOPF });
+        return {};
+      });
+      restrictedAktiv.push(teilnehmer);
+    } catch (e) { log('Restricted Mode: chat placeholder not registered', (e as Error).message); }
+  }
+
+  if (!vertrauenMeldungGezeigt) {
+    vertrauenMeldungGezeigt = true;
+    zeigeVertrauensMeldung();
+  }
+
+  // Nach dem Vertrauen: Platzhalter weg, voller Weg wie bei einem vertrauten Ordner.
+  context.subscriptions.push(
+    { dispose: () => { for (const d of restrictedAktiv) { try { d.dispose(); } catch { /* schon weg */ } } restrictedAktiv = []; } },
+    vscode.workspace.onDidGrantWorkspaceTrust(() => {
+      log('Workspace trust granted — starting cachly');
+      for (const d of restrictedAktiv) { try { d.dispose(); } catch { /* schon weg */ } }
+      restrictedAktiv = [];
+      activateFull(context);
+    }),
+  );
+}
+
+let vollAktiviert = false;
+
+function activateFull(context: vscode.ExtensionContext): void {
+  if (vollAktiviert) return;
+  vollAktiviert = true;
+
   statusBarItem = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Right, 100);
   statusBarItem.command = 'cachly.showBrainHealth';
   statusBarItem.tooltip = 'Cachly Brain — click for details';
@@ -544,6 +625,11 @@ export function activate(context: vscode.ExtensionContext) {
 
   // Zero-Config Framework Detection — run once after workspace opens
   detectAndSuggestFrameworks(context);
+
+  // Altbestand: Schluessel, die eine aeltere Fassung ins Projekt geschrieben hat
+  // (.mcp.json, .claude/hooks, .git/hooks), kommen heraus und liegen danach im
+  // Heimordner. Meldung nur, wenn wirklich einer gefunden wurde.
+  setTimeout(() => void bereinigeProjektAltbestand('start'), 1500);
 
   // MCP setup-detection: if Brain is configured but no .mcp.json found in workspace,
   // auto-write it — runs after silentAutoSetup has had time to complete (6s delay)
@@ -2298,26 +2384,33 @@ async function writeFileContent(filePath: string, content: string): Promise<void
  * Called from silentAutoSetup (background), finishSetup (manual wizard), and
  * checkMcpSetupAndNudge (catch-all safety net).
  */
-async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: string): Promise<CopilotAnbindung | undefined> {
+export async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: string): Promise<CopilotAnbindung | undefined> {
   const activeFile = vscode.window.activeTextEditor?.document.uri.fsPath
     ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   const gitRoot = activeFile ? await findGitRoot(activeFile) : undefined;
   const targetRoot = gitRoot ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!targetRoot) return { weg: 'kein-ordner' };
 
-  // .mcp.json — merge cachly entry; preserve all other MCP servers the user has configured
+  // Nichts schreiben, solange der Ordner nicht vertraut ist (Workspace Trust).
+  // Alle Aufrufer laufen erst nach dem Vertrauen; das hier ist der Gurt zum Hosentraeger.
+  if (!vscode.workspace.isTrusted) return { weg: 'kein-ordner' };
+
+  // Der Schluessel gehoert in den Heimordner (~/.cachly/credentials.json), NIE
+  // in eine Projektdatei: `git add .` checkt sie ein. Der MCP-Server und die
+  // Hooks lesen ihn dort selbst (lib/schluessel.ts). Erst dort ablegen, dann
+  // die Projektdateien schreiben — und Altbestand aus frueheren Fassungen
+  // gleich mitnehmen, mit Meldung.
+  await schluesselInsHeim(apiKey, instanceId);
+  await bereinigeProjektAltbestand('write', [targetRoot], apiKey);
+
+  // .mcp.json — merge cachly entry; preserve all other MCP servers the user has configured.
+  // Nur Adresse und Kennung, kein Schluessel.
   const mcpPath = path.join(targetRoot, '.mcp.json');
-  let mcpJson: { mcpServers?: Record<string, unknown> } = {};
+  let rawMcp: string | undefined;
   try {
-    const rawMcp = await vscode.workspace.fs.readFile(vscode.Uri.file(mcpPath));
-    mcpJson = parseJsonc(Buffer.from(rawMcp).toString('utf8')) as { mcpServers?: Record<string, unknown> };
-  } catch { /* new file or invalid JSON — start fresh */ }
-  if (!mcpJson.mcpServers) mcpJson.mcpServers = {};
-  mcpJson.mcpServers['cachly'] = {
-    command: 'npx', args: ['-y', '@cachly-dev/mcp-server@latest'],
-    env: { CACHLY_API_URL: baseUrl, CACHLY_JWT: apiKey, CACHLY_BRAIN_INSTANCE_ID: instanceId },
-  };
-  await writeFileContent(mcpPath, JSON.stringify(mcpJson, null, 2));
+    rawMcp = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(mcpPath))).toString('utf8');
+  } catch { /* new file */ }
+  await writeFileContent(mcpPath, fuegeInMcpJsonEin(rawMcp, baseUrl, instanceId));
 
   // .vscode/mcp.json — only where Copilot cannot see .mcp.json (see lib/copilotMcp.ts).
   let copilot: CopilotAnbindung | undefined;
@@ -2427,15 +2520,14 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
   // .git/hooks/post-commit — CLS (Continuous Learning Stream): auto-learns every
   // commit into the brain. Mirrors the MCP autopilot so VS-Code-only users get
   // ambient learning too. Best-effort, idempotent, preserves existing hooks.
-  // The API key is embedded (into local .git/, never committed) so the hook's
-  // cls-ingest call can authenticate — same posture as the editor MCP config.
-  const clsKey = vscode.workspace.getConfiguration('cachly').get<string>('apiKey', '');
-  await installClsHook(targetRoot, instanceId, clsKey || undefined);
+  // Ohne Schluessel: `cls-ingest` findet ihn selbst im Heimordner.
+  await installiereClsHook(targetRoot, instanceId, log);
 
   // .claude/hooks + settings.json — Ambient Recall (push-based memory) for
   // users who also run Claude Code in this workspace. Mirrors the MCP `init`
   // so recall/briefing/auto-learn happen automatically, no manual calls.
-  await installAmbientHooksVs(targetRoot, instanceId, clsKey || undefined);
+  // Dieselben Skripte und dasselbe Buendel wie `setup`; kein Schluessel darin.
+  await installiereAmbientHooks(targetRoot, instanceId, buendelPfad(), log);
 
   // CI scaffold — auto-detect GitHub vs GitLab from the origin remote and write
   // the matching config (GitHub Action workflow or GitLab include). Idempotent.
@@ -2447,100 +2539,116 @@ async function writeWorkspaceFiles(baseUrl: string, apiKey: string, instanceId: 
   return copilot;
 }
 
-/**
- * Install the CLS git post-commit hook. Kept in sync with the MCP autopilot
- * (sdk/mcp/src/index.ts). Idempotent: skips if our marker is already present,
- * appends if another hook exists, creates+chmods otherwise. Never throws.
- */
-async function installClsHook(targetRoot: string, instanceId: string, apiKey?: string): Promise<void> {
-  try {
-    const gitDir = path.join(targetRoot, '.git');
-    if (!fs.existsSync(gitDir)) return; // not a git repo (or a worktree file — skip)
-    const hookDir = path.join(gitDir, 'hooks');
-    const hookPath = path.join(hookDir, 'post-commit');
-    await fs.promises.mkdir(hookDir, { recursive: true });
-    const hookScript = buildClsPostCommitHook(instanceId, apiKey);
-    let existingHook = '';
-    try { existingHook = await fs.promises.readFile(hookPath, 'utf8'); } catch { /* no existing hook */ }
+// ── Schluessel im Heimordner statt im Projekt ────────────────────────────────
+//
+// Siehe lib/schluessel.ts. Der Schluessel liegt in ~/.cachly/credentials.json;
+// der MCP-Server findet ihn dort bei jedem Start, die Hooks ebenso. Eine
+// Projektdatei, die die Erweiterung schreibt, enthaelt ihn nie.
 
-    if (!existingHook) {
-      await fs.promises.writeFile(hookPath, hookScript + '\n', 'utf8');
-      try { await fs.promises.chmod(hookPath, 0o755); } catch { /* Windows: chmod is a no-op */ }
-      log('Installed CLS hook at .git/hooks/post-commit');
-      return;
-    }
-    if (existingHook.includes(`cachly CLS — Continuous Learning Stream ${CLS_HOOK_VERSION}`)) {
-      log('CLS hook already current in .git/hooks/post-commit');
-      return;
-    }
-    // Matches any prior cachly block (marker → exit 0), optionally its shebang —
-    // so old/broken v1 hooks are upgraded in place rather than skipped forever.
-    const oldBlock = /(?:#!\/bin\/sh\n)?# cachly CLS[\s\S]*?\nexit 0\n?/;
-    if (oldBlock.test(existingHook)) {
-      const replaced = existingHook.replace(oldBlock, hookScript);
-      await fs.promises.writeFile(hookPath, replaced.endsWith('\n') ? replaced : replaced + '\n', 'utf8');
-      try { await fs.promises.chmod(hookPath, 0o755); } catch { /* no-op on Windows */ }
-      log('Upgraded CLS hook in .git/hooks/post-commit');
-      return;
-    }
-    // Foreign hook with no cachly block → append ours.
-    await fs.promises.writeFile(hookPath, existingHook.trimEnd() + '\n\n' + hookScript + '\n', 'utf8');
-    log('Appended CLS hook to existing .git/hooks/post-commit');
-  } catch (e) {
-    log('CLS hook install skipped (non-critical)', (e as Error).message);
-  }
+/** Das Hook-Buendel, das die Erweiterung mitbringt (hooks/ neben package.json). */
+function buendelPfad(): string {
+  return path.join(extensionContext.extensionPath, 'hooks', HOOK_BUENDEL);
 }
 
+const HEIM_SCHLUESSEL_STAND = 'cachly.homeKeyFingerprint';
+let heimKonfliktGefragt = false;
+let heimFehlerGemeldet = false;
+
+/** Ersetzen darf die Erweiterung nur einen Schluessel, den sie selbst dorthin gelegt hat. */
+function darfHeimSchluesselErsetzen(alt: string): boolean {
+  const mein = extensionContext?.globalState.get<string>(HEIM_SCHLUESSEL_STAND);
+  return !!mein && schluesselFingerabdruck(alt) === mein;
+}
+
+async function schluesselInsHeim(apiKey: string, instanceId: string, erzwingen = false): Promise<HeimAblage | undefined> {
+  if (!isValidApiKey(apiKey)) return undefined;
+  const ergebnis = await legeSchluesselImHeimAb({ apiKey, instanceId, darfErsetzen: darfHeimSchluesselErsetzen, erzwingen });
+  if (ergebnis.zustand === 'geschrieben' || ergebnis.zustand === 'unveraendert') {
+    void extensionContext.globalState.update(HEIM_SCHLUESSEL_STAND, schluesselFingerabdruck(apiKey));
+  } else if (ergebnis.zustand === 'konflikt') {
+    log('credentials.json holds a different key — left alone');
+    frageNachHeimKonflikt(apiKey, instanceId);
+  } else if (ergebnis.zustand === 'fehler') {
+    log('credentials.json not written', ergebnis.grund);
+    if (!heimFehlerGemeldet) {
+      heimFehlerGemeldet = true;
+      void vscode.window.showWarningMessage(heimFehlerText(ergebnis.grund));
+    }
+  }
+  return ergebnis;
+}
+
+function frageNachHeimKonflikt(apiKey: string, instanceId: string): void {
+  if (heimKonfliktGefragt) return;
+  heimKonfliktGefragt = true;
+  void vscode.window
+    .showWarningMessage(HEIM_KONFLIKT_MELDUNG, HEIM_KONFLIKT_ERSETZEN, HEIM_KONFLIKT_BEHALTEN)
+    .then(async (wahl) => {
+      if (wahl !== HEIM_KONFLIKT_ERSETZEN) return;
+      const r = await schluesselInsHeim(apiKey, instanceId, true);
+      if (r && (r.zustand === 'geschrieben' || r.zustand === 'unveraendert')) {
+        await bereinigeProjektAltbestand('konflikt');
+      }
+    });
+}
+
+/** Arbeitsordner, ihre Git-Wurzeln und die Git-Wurzel der geoeffneten Datei. */
+async function projektOrdner(): Promise<string[]> {
+  const aus = new Set<string>();
+  const ab = async (dir: string) => {
+    aus.add(dir);
+    const g = await findGitRoot(path.join(dir, '_'));
+    if (g) aus.add(g);
+  };
+  for (const f of vscode.workspace.workspaceFolders ?? []) await ab(f.uri.fsPath);
+  const aktiv = vscode.window.activeTextEditor?.document.uri.fsPath;
+  if (aktiv) {
+    const g = await findGitRoot(aktiv);
+    if (g) aus.add(g);
+  }
+  return [...aus];
+}
+
+let altbestandLaeuft = false;
+
 /**
- * Install the Ambient Recall hooks (.claude/hooks/*.sh + settings.json merge).
- * Kept in sync with sdk/mcp/src/ambient-hooks.ts installAmbientHooks. Idempotent
- * and non-destructive (foreign hooks preserved, stale cachly entries upgraded).
- * Never throws. API key goes into local scripts only — .claude/hooks is
- * meant for the user's machine, same posture as the CLS hook.
+ * Altbestand: Schluessel, die eine aeltere Fassung der Erweiterung in die
+ * Projektdateien geschrieben hat (.mcp.json, .claude/hooks, .git/hooks), kommen
+ * heraus und liegen danach im Heimordner. Fremde Eintraege und Dateien bleiben.
+ * Die Meldung erscheint nur, wenn wirklich ein Schluessel gefunden wurde.
  */
-async function installAmbientHooksVs(targetRoot: string, instanceId: string, apiKey?: string): Promise<void> {
+async function bereinigeProjektAltbestand(ausloeser: string, ordner?: string[], schluessel?: string): Promise<AltbestandErgebnis | undefined> {
+  if (!vscode.workspace.isTrusted || altbestandLaeuft) return undefined;
+  altbestandLaeuft = true;
   try {
-    const hookDir = path.join(targetRoot, '.claude', 'hooks');
-    await fs.promises.mkdir(hookDir, { recursive: true });
-
-    const events: AmbientHookEvent[] = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'];
-    const paths = {} as AmbientHookPaths;
-    let wrote = false;
-    for (const event of events) {
-      const p = path.join(hookDir, AMBIENT_SCRIPT_NAMES[event]);
-      paths[event] = p;
-      const script = buildAmbientHook(event, instanceId, apiKey) + '\n';
-      let prev = '';
-      try { prev = await fs.promises.readFile(p, 'utf8'); } catch { /* new file */ }
-      if (prev !== script) {
-        await fs.promises.writeFile(p, script, 'utf8');
-        try { await fs.promises.chmod(p, 0o755); } catch { /* Windows: chmod is a no-op */ }
-        wrote = true;
-      }
+    const config = vscode.workspace.getConfiguration('cachly');
+    const eigener = (schluessel ?? config.get<string>('apiKey', '')).trim();
+    const instanceId = config.get<string>('instanceId', '').trim();
+    const ergebnis = await bereinigeAltbestand({
+      ordner: ordner ?? (await projektOrdner()),
+      eigenerSchluessel: isValidApiKey(eigener) ? eigener : '',
+      instanceId: instanceId || undefined,
+      buendelQuelle: buendelPfad(),
+      darfErsetzen: darfHeimSchluesselErsetzen,
+      log,
+    });
+    if (ergebnis.heimSchluessel && ergebnis.heimSchluessel === eigener) {
+      void extensionContext.globalState.update(HEIM_SCHLUESSEL_STAND, schluesselFingerabdruck(eigener));
     }
-
-    const settingsPath = path.join(targetRoot, '.claude', 'settings.json');
-    let existing: ClaudeSettingsLike = {};
-    let parseOk = true;
-    try {
-      existing = parseJsonc(await fs.promises.readFile(settingsPath, 'utf8')) as ClaudeSettingsLike;
-    } catch (e) {
-      try {
-        await fs.promises.stat(settingsPath);
-        parseOk = false; // exists but unparseable → never overwrite the user's file
-        log('.claude/settings.json exists but could not be parsed — not overwriting', (e as Error).message);
-      } catch { /* truly new file */ }
+    if (ergebnis.heim?.zustand === 'konflikt' && isValidApiKey(eigener)) frageNachHeimKonflikt(eigener, instanceId);
+    if (ergebnis.fremd.length) log(`Altbestand (${ausloeser}): foreign key left untouched in`, ergebnis.fremd);
+    if (ergebnis.bereinigt.length || ergebnis.offen.length) {
+      log(`Altbestand (${ausloeser}): key removed from project files`, { bereinigt: ergebnis.bereinigt, offen: ergebnis.offen });
+      void vscode.window
+        .showWarningMessage(altbestandText(ergebnis.bereinigt.length > 0, ergebnis.offen), ALTBESTAND_KNOPF)
+        .then((wahl) => { if (wahl === ALTBESTAND_KNOPF) void vscode.env.openExternal(vscode.Uri.parse('https://cachly.dev')); });
     }
-    if (parseOk) {
-      const { settings, changed } = mergeAmbientSettings(existing, paths);
-      if (changed) {
-        await fs.promises.writeFile(settingsPath, JSON.stringify(settings, null, 2) + '\n', 'utf8');
-        wrote = true;
-      }
-    }
-    if (wrote) log(`Ambient Recall hooks installed/updated (.claude/hooks, ${AMBIENT_HOOK_VERSION})`);
+    return ergebnis;
   } catch (e) {
-    log('Ambient hooks install skipped (non-critical)', (e as Error).message);
+    log('Altbestand check failed (non-critical)', (e as Error).message);
+    return undefined;
+  } finally {
+    altbestandLaeuft = false;
   }
 }
 

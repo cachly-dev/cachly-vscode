@@ -5,6 +5,7 @@ import {
   mergeAmbientSettings,
   AMBIENT_HOOK_VERSION,
   AMBIENT_SCRIPT_NAMES,
+  HOOK_BUENDEL,
   PRE_TOOL_USE_MATCHER,
   type AmbientHookPaths,
 } from './ambient';
@@ -17,20 +18,33 @@ const paths: AmbientHookPaths = {
 };
 
 describe('buildAmbientHook', () => {
-  it('emits a versioned, graceful cross-platform Node script per event (v3)', () => {
+  it('emits a versioned script per event that loads the bundle next to it (v5, the shape `setup` writes)', () => {
+    expect(AMBIENT_HOOK_VERSION).toBe('v5');
     for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'] as const) {
       const s = buildAmbientHook(event, 'inst-1');
       expect(s.startsWith('#!/usr/bin/env node')).toBe(true);
-      expect(s).toContain(AMBIENT_HOOK_VERSION);
+      expect(s).toContain(`// cachly Ambient Recall — ${event} ${AMBIENT_HOOK_VERSION}`);
+      expect(s).toContain("process.env.CACHLY_BRAIN_INSTANCE_ID = 'inst-1';");
       expect(s).toContain(`process.env.CACHLY_HOOK_EVENT = '${event}';`);
-      expect(s).toContain('shell: true'); // resolves npx/npx.cmd on Windows too
-      expect(s).toContain("child.on('close', () => process.exit(0));");
+      expect(s).toContain(`process.argv.splice(2, process.argv.length, '${event}');`);
+      expect(s).toContain(`await import('./${HOOK_BUENDEL}');`);
+      // no npx, no child process: 7.7 s warm / 17.1 s cold per prompt was the v4 cost
+      expect(s).not.toContain('npx');
+      expect(s).not.toContain('spawn');
     }
   });
 
-  it('embeds the JWT only when provided', () => {
-    expect(buildAmbientHook('SessionStart', 'i')).not.toContain('CACHLY_JWT');
-    expect(buildAmbientHook('SessionStart', 'i', 'cky_x')).toContain("process.env.CACHLY_JWT = 'cky_x';");
+  it('never embeds a key (the script is a project file that `git add .` checks in)', () => {
+    for (const event of ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'] as const) {
+      expect(buildAmbientHook(event, 'i')).not.toContain('CACHLY_JWT');
+      // an old caller still passing a third argument must not get a key written
+      const s = (buildAmbientHook as (e: typeof event, i: string, k?: string) => string)(event, 'i', 'cky_live_secret');
+      expect(s).not.toContain('cky_live_secret');
+    }
+  });
+
+  it('escapes the instance id for a single-quoted JS string', () => {
+    expect(buildAmbientHook('Stop', "a'b\\c")).toContain("process.env.CACHLY_BRAIN_INSTANCE_ID = 'a\\'b\\\\c';");
   });
 
   it('script names carry the shared upgrade marker', () => {
