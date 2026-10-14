@@ -4,6 +4,14 @@
 
 ## [0.12.7] – 2026-10-12 — *"Your key stays in your home folder, and a new folder no longer looks dead"*
 
+### Usage events
+- **Events now say which program sends them.** Until 0.12.6 every event said
+  `editor: "vscode"`, also from Cursor, Windsurf or VSCodium, which load the
+  same extension. Now `editor` is the program (`vscode`, `cursor`, `windsurf`,
+  `vscodium`, `trae`, `kiro`, `positron`, otherwise a short lowercase name) and
+  `editor_version` is its version. `source` stays `vscode` for this extension.
+  Nothing else is sent.
+
 ### Security
 - **The API key is no longer written into your project.** Until 0.12.6 the
   extension put it in clear text into `.mcp.json` and into the four files under

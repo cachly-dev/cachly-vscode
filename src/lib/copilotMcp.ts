@@ -43,6 +43,7 @@ import { promises as fsp } from 'fs';
 import { homedir } from 'os';
 import * as path from 'path';
 import { DEFAULT_API_URL, normalizeBaseUrl, parseJsonc } from './config';
+import { programmName } from './programm';
 
 export const SERVER_NAME = 'cachly';
 
@@ -96,9 +97,9 @@ export function liestWurzelMcpJson(vscodeVersion: string): boolean {
   return versionMindestens(vscodeVersion, WURZEL_MCP_JSON_AB);
 }
 
-/** `vscode.env.appName`: "Visual Studio Code" oder "Visual Studio Code - Insiders". */
+/** `vscode.env.appName`: "Visual Studio Code" oder "Visual Studio Code - Insiders" (programm.ts). */
 export function hatCopilot(appName: string): boolean {
-  return /^Visual Studio Code\b/.test(appName.trim());
+  return programmName(appName) === 'vscode';
 }
 
 export function cachlyServerEintrag(instanceId: string, apiUrl?: string): VsCodeStdioServer {

@@ -21,6 +21,7 @@ import { fuegeInMcpJsonEin } from './lib/mcpJson';
 import { installiereAmbientHooks, installiereClsHook } from './lib/projektHooks';
 import { legeSchluesselImHeimAb, schluesselFingerabdruck, type HeimAblage } from './lib/schluessel';
 import { bereinigeAltbestand, type AltbestandErgebnis } from './lib/altbestand';
+import { editorFassung, programmName } from './lib/programm';
 import {
   VERTRAUEN_BEFEHL, VERTRAUEN_STATUSLEISTE, VERTRAUEN_STATUSLEISTE_HILFE, VERTRAUEN_MELDUNG, VERTRAUEN_KNOPF,
   VERTRAUEN_CHAT_ANTWORT, ALTBESTAND_KNOPF, altbestandText, HEIM_KONFLIKT_MELDUNG, HEIM_KONFLIKT_ERSETZEN,
@@ -3059,7 +3060,10 @@ function trackVSCodeEvent(
   void apiPostAnon(`${baseUrl}/api/v1/telemetry/mcp`, {
     event,
     version: extensionVersion,
-    editor: 'vscode',
+    // Das Programm (VS Code, Cursor, Windsurf …) und seine Fassung; `source`
+    // bleibt 'vscode' fuer diese Erweiterung (lib/programm.ts, Abhakliste 1.3).
+    editor: programmName(vscode.env.appName),
+    editor_version: editorFassung(vscode.version),
     source: 'vscode',
     api_key: effectiveKey,
     instance_id: instanceId,
