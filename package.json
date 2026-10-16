@@ -2,7 +2,7 @@
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
   "description": "ChatGPT and Claude remember your conversations — cachly remembers your codebase. The bug you fixed, why you chose Postgres, the deploy step that always breaks. Free trial without an account.",
-  "version": "0.12.7",
+  "version": "0.12.8",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
   "galleryBanner": {
@@ -76,6 +76,10 @@
       {
         "command": "cachly.recallForFile",
         "title": "Cachly: Recall Lessons for This File"
+      },
+      {
+        "command": "cachly.linkAccount",
+        "title": "Cachly: Link Account (keep your lessons)"
       },
       {
         "command": "cachly.resetAuth",

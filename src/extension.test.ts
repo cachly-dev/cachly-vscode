@@ -198,6 +198,9 @@ describe('Restricted Mode (Ordner nicht vertraut)', () => {
     ext.activate(kontext());
     for (const c of PAKET.contributes.commands) expect(fake.zustand.befehle.has(c.command), c.command).toBe(true);
     expect(fake.zustand.befehle.has('cachly.linkAccount')).toBe(true);
+    // GROW-024: nach Ablauf des Test-Brains ist "Link Account" der Weg zum Konto —
+    // ohne Eintrag in package.json fand ihn die Befehlspalette nicht.
+    expect(PAKET.contributes.commands.map((c) => c.command)).toContain('cachly.linkAccount');
     expect(fake.zustand.chatTeilnehmer).toEqual(['cachly.brain']);
 
     const vorher = fake.zustand.meldungen.length;

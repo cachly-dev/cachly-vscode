@@ -22,6 +22,7 @@ import { installiereAmbientHooks, installiereClsHook } from './lib/projektHooks'
 import { legeSchluesselImHeimAb, schluesselFingerabdruck, type HeimAblage } from './lib/schluessel';
 import { bereinigeAltbestand, type AltbestandErgebnis } from './lib/altbestand';
 import { editorFassung, programmName } from './lib/programm';
+import { kontoPfad, liesKontoDatei, werteKontoAus } from './lib/konto';
 import {
   VERTRAUEN_BEFEHL, VERTRAUEN_STATUSLEISTE, VERTRAUEN_STATUSLEISTE_HILFE, VERTRAUEN_MELDUNG, VERTRAUEN_KNOPF,
   VERTRAUEN_CHAT_ANTWORT, ALTBESTAND_KNOPF, altbestandText, HEIM_KONFLIKT_MELDUNG, HEIM_KONFLIKT_ERSETZEN,
@@ -3336,16 +3337,30 @@ function buildHealthHtml(health: BrainHealth): string {
   const ambientInjectionsTotal = extensionContext?.globalState.get<number>(AMBIENT_INJECTIONS_KEY, 0) ?? 0;
   const ambientSavedEst = ambientInjectionsTotal * TOKENS_PER_RECALL;
   const ambientNet = ambientSavedEst - ambientInjectedTotal;
-  const ambientSection = ambientInjectionsTotal > 0
-    ? `<h2>🔬 Ambient Recall — net token impact</h2>
-       <table>
-         <tr><td>Lessons surfaced (@cachly)</td><td><strong>${ambientInjectionsTotal.toLocaleString()}</strong></td><td></td></tr>
-         <tr><td>Tokens injected (gross cost)</td><td>${fmtTokens(ambientInjectedTotal)}</td><td></td></tr>
-         <tr><td>Est. tokens saved</td><td>${fmtTokens(ambientSavedEst)}</td><td class="hint">~${TOKENS_PER_RECALL}/lesson</td></tr>
-         <tr><td><strong>Net</strong></td><td><strong class="${ambientNet >= 0 ? 'pos' : 'neg'}">${ambientNet >= 0 ? '+' : '−'}${fmtTokens(Math.abs(ambientNet)).replace('~', '')}</strong></td><td></td></tr>
-       </table>
-       <p class="hint">This session: ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected. Honest accounting — the injected cost is shown, not just the savings.</p>`
+  const vorzeichen = (n: number) => `${n >= 0 ? '+' : '−'}${fmtTokens(Math.abs(n)).replace('~', '')}`;
+  // GROW-024: the real account is the ledger the hooks write (lib/konto.ts),
+  // per Brain instance — the same numbers as `ambient-stats`, negative too.
+  // No ledger line for this Brain yet: say so, never hide the section.
+  const kontoInstanz = vscode.workspace.getConfiguration('cachly').get<string>('instanceId', '') || undefined;
+  const konto = werteKontoAus(liesKontoDatei(kontoPfad()), kontoInstanz);
+  const kontoRest = [
+    ...(konto.ohneInstanz > 0 ? [`${konto.ohneInstanz} older entries without an instance`] : []),
+    ...(konto.andereInstanzen > 0 ? [`entries of ${konto.andereInstanzen} other instance${konto.andereInstanzen === 1 ? '' : 's'}`] : []),
+  ];
+  const chatZeile = ambientInjectionsTotal > 0
+    ? `<p class="hint">@cachly chat: ${ambientInjectionsTotal.toLocaleString()} lessons surfaced · ${fmtTokens(ambientInjectedTotal)} injected · est. ${fmtTokens(ambientSavedEst)} saved (~${TOKENS_PER_RECALL}/lesson) · net ${vorzeichen(ambientNet)}. This session: ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected.</p>`
     : '';
+  const ambientSection = `<h2>🔬 Ambient Recall — net token account</h2>
+    ${konto.gemessen
+      ? `<table>
+         <tr><td>Turns recorded</td><td><strong>${konto.eintraege.toLocaleString()}</strong></td><td></td></tr>
+         <tr><td>Tokens injected (cost)</td><td>${fmtTokens(konto.injected)}</td><td></td></tr>
+         <tr><td>Tokens prevented</td><td>${fmtTokens(konto.prevented)}</td><td class="hint">agent-reported via ambient-credit</td></tr>
+         <tr><td><strong>Net</strong></td><td><strong class="${konto.net >= 0 ? 'pos' : 'neg'}">${vorzeichen(konto.net)}</strong></td><td></td></tr>
+       </table>
+       <p class="hint">From ~/.cachly/ambient-ledger.jsonl${kontoInstanz ? ` for this Brain (${esc(kontoInstanz.slice(0, 8))}…)` : ''} — the same numbers as <code>npx @cachly-dev/mcp-server ambient-stats</code>. The cost is shown, not just the savings.${kontoRest.length ? ` Not counted: ${kontoRest.join(', ')}.` : ''}</p>`
+      : `<p class="hint">Not measured yet: no entries for this Brain in ~/.cachly/ambient-ledger.jsonl. The hooks set up by <code>init</code> or <code>setup</code> write one line per briefing.${kontoRest.length ? ` On this computer: ${kontoRest.join(', ')}.` : ''}</p>`}
+    ${chatZeile}`;
 
   // ── Lessons — searchable, copyable. data-lesson carries the lowercase
   // search key; the filter script in wrapHtml toggles row visibility. ──

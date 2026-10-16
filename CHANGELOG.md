@@ -2,6 +2,22 @@
 
 ---
 
+## [0.12.8] – 2026-10-16 — *"Your real numbers, and a way back to your account"*
+
+- **The Brain panel shows your real net-token account.** It reads
+  `~/.cachly/ambient-ledger.jsonl`, the file the cachly hooks write in Claude
+  Code, Cursor, Codex and Gemini CLI — the same numbers as
+  `npx @cachly-dev/mcp-server ambient-stats`, for the Brain this window uses,
+  and negative when that is the truth. Until 0.12.7 the panel counted only
+  `@cachly` chat injections; most users saw nothing, because the section hid
+  itself at 0. With no entries yet it now says "Not measured yet". The `@cachly`
+  chat numbers stay as one extra line.
+- **"Cachly: Link Account (keep your lessons)" is in the Command Palette.** The
+  command existed, but without an entry in the extension manifest nobody could
+  find it once the test Brain ran out.
+
+---
+
 ## [0.12.7] – 2026-10-12 — *"Your key stays in your home folder, and a new folder no longer looks dead"*
 
 ### Usage events
