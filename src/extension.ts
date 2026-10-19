@@ -2322,33 +2322,34 @@ async function finishSetup(token: string, baseUrl: string) {
 }
 
 function buildCopilotInstructions(instanceId: string): string {
-  // Full lifecycle protocol — kept in sync with the MCP autopilot's CLAUDE.md
-  // block (sdk/mcp/src/index.ts buildClaudeMdBlock) so VS-Code-only users get
-  // exactly the same "always active" behaviour as users who ran `autopilot`.
+  // Wortgleich mit buildClaudeMdBlock (sdk/mcp/src/index.ts); ein Test haelt das fest.
   return `## Cachly AI Brain — Always Active
 
-This project uses the Cachly AI Brain for persistent memory across sessions.
-Instance: \`${instanceId}\`. The Brain MCP server should be running (see \`.mcp.json\`).
+The Brain MCP server runs automatically. Instance: \`${instanceId}\`
 
-### AT THE START of every new conversation (mandatory — before anything else):
+---
+
+### AT THE START of every new conversation (mandatory — first thing, before anything else):
 \`\`\`
 session_start(instance_id="${instanceId}", workspace_path="<absolute path to this project>", focus="<first topic the user mentioned>")
 \`\`\`
-Show the briefing to the user. If the Brain is empty, seed it:
+Show the full briefing output to the user. If the response says the brain is empty or has 0 lessons, immediately seed it:
 \`\`\`
 brain_from_git(instance_id="${instanceId}", repo_path="<workspace_path>", limit=100)
 \`\`\`
+Then tell the user: "Your brain just learned from your git history. You're now pre-briefed."
 
-### BEFORE every task (mandatory):
+### BEFORE every task (mandatory — no exceptions):
 \`\`\`
 smart_recall(instance_id="${instanceId}", query="<what you are about to do>")
 \`\`\`
-If relevant lessons are found, use them before researching.
+If relevant lessons are found, say: "Your brain knows this pattern — [lesson]." Then proceed.
 
 ### BEFORE editing any file (mandatory):
 \`\`\`
 remember_context(instance_id="${instanceId}", key="wip:<filename>", content="EDITING: <file:line> — <goal>", ttl=86400)
 \`\`\`
+When done: update content to \`"DONE: <file> — <summary>"\`.
 
 ### AFTER every fix, deploy, or discovery (mandatory):
 \`\`\`
@@ -2357,22 +2358,25 @@ learn_from_attempts(instance_id="${instanceId}", topic="<category:keyword>", out
   file_paths=["..."], commands=["..."], tags=["..."])
 \`\`\`
 
-### WHEN debugging any error (before grepping/reading files):
-\`\`\`
-causal_trace(instance_id="${instanceId}", problem="<exact error or symptom>")
-\`\`\`
-If the Brain already has a known fix, use it directly.
-
 ### AT THE END of every conversation (mandatory):
 \`\`\`
 session_end(instance_id="${instanceId}", summary="<one sentence: what was done>", files_changed=["..."])
 \`\`\`
 
+### WHEN debugging any error (mandatory before grepping/reading files):
+\`\`\`
+causal_trace(instance_id="${instanceId}", problem="<exact error or symptom>")
+\`\`\`
+If a known fix exists in the Brain, use it directly. Skip research if Brain has the answer.
+
+### BEFORE any risky operation (deploy, migration, dependency upgrade):
+\`\`\`
+brain_predict(instance_id="${instanceId}", context="<what you are about to do>")
+\`\`\`
+Report predicted failure risks to the user before proceeding.
+
 ### Half-finished code rule:
 Never commit code that does not compile. Run \`tsc --noEmit\` / \`go build ./...\` before every commit.
-
-### Why this matters
-Each recall saves ~1,200 tokens. The Brain survives IDE restarts, team switches, and model upgrades.
 `;
 }
 

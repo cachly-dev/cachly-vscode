@@ -2,6 +2,12 @@
 
 ---
 
+## [0.12.10] – 2026-10-20 — *"The recall rule is the same text everywhere"*
+
+- **One text, checked by a test.** The rule the extension writes (recall before each task, learn after each fix) was a hand-made copy of the MCP setup text and had drifted: it lacked the `brain_predict` step before risky changes and had other wording. It is now word for word the block that `npx @cachly-dev/mcp-server init` writes. A test reads both sources and fails on any difference.
+
+---
+
 ## [0.12.9] – 2026-10-19 — *"One file that cannot be written no longer stops the rest"*
 
 - **The recall rule reaches every file it can.** The extension writes the rule "call `smart_recall` at the start of every task" into `CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`, `.windsurfrules`, `.clinerules` and `.cursor/rules/cachly.mdc`. Until 0.12.8 the first file that failed to write (read-only, no permission) stopped the loop and the later files stayed without the rule. Now the failure goes to the log and the other files are written.
