@@ -267,6 +267,21 @@ describe('Schreibwege der Erweiterung (writeWorkspaceFiles)', () => {
     ext.deactivate();
   });
 
+  it('eine Regeldatei, die sich nicht schreiben laesst, stoppt die uebrigen nicht (Abrufregel kommt trotzdem an)', async () => {
+    const root = neuesProjekt();
+    fs.mkdirSync(path.join(root, 'CLAUDE.md')); // Ordner statt Datei: Schreiben scheitert
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [root];
+    fake.zustand.config['cachly.apiKey'] = LIVE_KEY;
+    fake.zustand.config['cachly.instanceId'] = INSTANZ;
+    ext.activate(kontext());
+    await ext.writeWorkspaceFiles(attrappeUrl, LIVE_KEY, INSTANZ);
+    for (const datei of ['AGENTS.md', '.github/copilot-instructions.md', '.windsurfrules', '.clinerules', '.cursor/rules/cachly.mdc']) {
+      expect(fs.readFileSync(path.join(root, datei), 'utf8'), datei).toContain('smart_recall(instance_id="' + INSTANZ + '"');
+    }
+    ext.deactivate();
+  });
+
   it('.mcp.json traegt nur Adresse und Kennung; der Schluessel liegt im Heimordner', async () => {
     const { root, ext } = await schreibe();
     const mcp = JSON.parse(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8'));

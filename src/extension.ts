@@ -2446,6 +2446,9 @@ export async function writeWorkspaceFiles(baseUrl: string, apiKey: string, insta
     path.join(targetRoot, '.clinerules'),
   ];
   for (const instructionsPath of instructionTargets) {
+    // Ein Schreibfehler an EINER Datei (Rechte, schreibgeschuetzt) darf die
+    // uebrigen nicht verhindern: er wird ins Protokoll geschrieben, weiter geht es.
+    try {
     let existingInstructions = '';
     try {
       const rawInstr = await vscode.workspace.fs.readFile(vscode.Uri.file(instructionsPath));
@@ -2464,6 +2467,9 @@ export async function writeWorkspaceFiles(baseUrl: string, apiKey: string, insta
       newInstructions = brainBlock + '\n';
     }
     await writeFileContent(instructionsPath, newInstructions);
+    } catch (e) {
+      log('instructions file not written', instructionsPath, (e as Error).message);
+    }
   }
 
   // Cursor: .cursor/rules/cachly.mdc — YAML frontmatter (alwaysApply) makes the

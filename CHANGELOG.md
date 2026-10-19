@@ -2,6 +2,12 @@
 
 ---
 
+## [0.12.9] – 2026-10-19 — *"One file that cannot be written no longer stops the rest"*
+
+- **The recall rule reaches every file it can.** The extension writes the rule "call `smart_recall` at the start of every task" into `CLAUDE.md`, `AGENTS.md`, `.github/copilot-instructions.md`, `.windsurfrules`, `.clinerules` and `.cursor/rules/cachly.mdc`. Until 0.12.8 the first file that failed to write (read-only, no permission) stopped the loop and the later files stayed without the rule. Now the failure goes to the log and the other files are written.
+
+---
+
 ## [0.12.8] – 2026-10-16 — *"Your real numbers, and a way back to your account"*
 
 - **The Brain panel shows your real net-token account.** It reads
