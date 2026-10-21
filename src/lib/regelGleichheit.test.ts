@@ -4,7 +4,7 @@ import * as path from 'path';
 import { fileURLToPath } from 'url';
 
 // buildCopilotInstructions (extension.ts) ist eine Handkopie von
-// buildClaudeMdBlock im MCP-Paket (sdk/mcp/src/index.ts). Dieser Test liest
+// buildClaudeMdBlock im MCP-Paket (sdk/mcp/src/projektdateien.ts). Dieser Test liest
 // beide Quelltexte und verlangt Wortgleichheit. Fehlt eine Quelle, scheitert
 // er mit Meldung: ein stilles Ueberspringen liesse die Kopien auseinanderlaufen.
 
@@ -35,7 +35,7 @@ function koerper(quelle: string, funktion: string): string {
 }
 
 describe('Abrufregel der VS-Code-Erweiterung', () => {
-  const mcp = koerper(lies(['..', '..', '..', 'mcp', 'src', 'index.ts']), 'export function buildClaudeMdBlock');
+  const mcp = koerper(lies(['..', '..', '..', 'mcp', 'src', 'projektdateien.ts']), 'export function buildClaudeMdBlock');
   const vs = koerper(lies(['..', 'extension.ts']), 'function buildCopilotInstructions');
 
   it('ist wortgleich mit dem Block, den die MCP-Einrichtung schreibt', () => {

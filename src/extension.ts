@@ -2322,7 +2322,7 @@ async function finishSetup(token: string, baseUrl: string) {
 }
 
 function buildCopilotInstructions(instanceId: string): string {
-  // Wortgleich mit buildClaudeMdBlock (sdk/mcp/src/index.ts); ein Test haelt das fest.
+  // Wortgleich mit buildClaudeMdBlock (sdk/mcp/src/projektdateien.ts); ein Test haelt das fest.
   return `## Cachly AI Brain — Always Active
 
 The Brain MCP server runs automatically. Instance: \`${instanceId}\`
