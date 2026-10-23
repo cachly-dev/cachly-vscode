@@ -23,6 +23,7 @@ import { legeSchluesselImHeimAb, schluesselFingerabdruck, type HeimAblage } from
 import { bereinigeAltbestand, type AltbestandErgebnis } from './lib/altbestand';
 import { editorFassung, programmName } from './lib/programm';
 import { kontoPfad, liesKontoDatei, werteKontoAus } from './lib/konto';
+import { ergaenzeGitExclude, schreibeRegelwissen } from './lib/regelwissen';
 import {
   VERTRAUEN_BEFEHL, VERTRAUEN_STATUSLEISTE, VERTRAUEN_STATUSLEISTE_HILFE, VERTRAUEN_MELDUNG, VERTRAUEN_KNOPF,
   VERTRAUEN_CHAT_ANTWORT, ALTBESTAND_KNOPF, altbestandText, HEIM_KONFLIKT_MELDUNG, HEIM_KONFLIKT_ERSETZEN,
@@ -526,6 +527,22 @@ function activateFull(context: vscode.ExtensionContext): void {
         if (doc.uri.scheme !== 'file') return;
         if (briefingDebounce) clearTimeout(briefingDebounce);
         briefingDebounce = setTimeout(() => void proactiveBriefingForDocument(doc), 1200);
+      }),
+    );
+  }
+
+  // ── Projektwissen in die Regeldateien von Copilot und Cursor (Abhakliste 5.2) ──
+  // Beide Assistenten rufen smart_recall nie von sich aus auf, laden ihre
+  // Regeldateien aber in jeden Chat. Beim Start und beim Dateiwechsel (hoechstens
+  // alle 3 min) holt die Erweiterung den gerahmten Block vom Server und legt ihn
+  // dort ab (lib/regelwissen.ts). Opt-out: cachly.regelwissen.
+  if (cfg.get<boolean>('regelwissen', true)) {
+    setTimeout(() => void regelwissenAktualisieren(), 5000);
+    context.subscriptions.push(
+      vscode.window.onDidChangeActiveTextEditor((editor) => {
+        if (!editor || editor.document.uri.scheme !== 'file') return;
+        if (regelwissenDebounce) clearTimeout(regelwissenDebounce);
+        regelwissenDebounce = setTimeout(() => void regelwissenAktualisieren(), 10_000);
       }),
     );
   }
@@ -3613,6 +3630,45 @@ async function checkMcpSetupAndNudge(context: vscode.ExtensionContext): Promise<
 // is briefed at most once until its content meaningfully changes.
 let briefingDebounce: ReturnType<typeof setTimeout> | undefined;
 const briefedFiles = new Set<string>();
+
+// Regeldatei-Wissen (Abhakliste 5.2): Takt, Entprellung, einmalige Meldung je Sitzung.
+const REGELWISSEN_ABSTAND_MS = 3 * 60_000;
+let regelwissenZuletzt = 0;
+let regelwissenDebounce: ReturnType<typeof setTimeout> | undefined;
+let regelwissenGemeldet = false;
+
+/**
+ * Holt den Wissensblock fuer die offenen Dateien und legt ihn in den Regeldateien
+ * ab. Hoechstens alle 3 min; ein Fehler bleibt still, der naechste Dateiwechsel
+ * versucht es wieder. Antwortet der Server (noch) nicht, bleibt alles, wie es ist.
+ */
+async function regelwissenAktualisieren(): Promise<void> {
+  if (Date.now() - regelwissenZuletzt < REGELWISSEN_ABSTAND_MS) return;
+  const config = vscode.workspace.getConfiguration('cachly');
+  const apiKey = config.get<string>('apiKey', '');
+  const instanceId = await getEffectiveInstanceId();
+  const wurzel = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!isValidApiKey(apiKey) || !instanceId || !wurzel) return;
+  regelwissenZuletzt = Date.now();
+  const dateien = (vscode.window.visibleTextEditors ?? [])
+    .filter((e) => e.document.uri.scheme === 'file')
+    .map((e) => vscode.workspace.asRelativePath(e.document.uri, false))
+    .slice(0, 10);
+  try {
+    const res = await apiPost(`${apiBaseUrl(config)}/api/v1/instances/${instanceId}/regelwissen`, apiKey, {
+      dateien,
+    }) as { markdown?: unknown } | undefined;
+    if (!res || typeof res.markdown !== 'string') return;
+    const ergebnis = schreibeRegelwissen(wurzel, res.markdown);
+    if (res.markdown.trim()) ergaenzeGitExclude(wurzel);
+    if (!regelwissenGemeldet && Object.values(ergebnis).includes('geschrieben')) {
+      regelwissenGemeldet = true;
+      trackVSCodeEvent('vscode_regelwissen_geschrieben', { apiKey, instanceId });
+    }
+  } catch {
+    // still — der naechste Dateiwechsel versucht es wieder
+  }
+}
 
 // Per-session dedupe by TOPIC, not just by file. Deduping only by file meant one
 // lesson could pop up again for every new file it matched — the same warning

@@ -2,6 +2,18 @@
 
 ---
 
+## [0.12.11] – 2026-10-23 — *"Copilot sees your project's experience without asking for it"*
+
+- **Your Brain's lessons now reach Copilot and Cursor in every chat.** Neither assistant calls cachly on its own. Both load their rule files into every chat, so the extension now writes the most relevant lessons there: first the ones about the files you have open, then your project's critical warnings — at most 12, about 2,000 tokens.
+  - Copilot: `.github/instructions/cachly-wissen.instructions.md` (`applyTo: "**"`).
+  - Cursor: `.cursor/rules/cachly-wissen.mdc` (`alwaysApply: true`).
+- Refreshed when the extension starts and when you switch files, at most every 3 minutes. A file at that path that cachly did not write is left alone.
+- Both paths are added to `.git/info/exclude`, so the block is not committed by accident.
+- The lessons are framed as stored notes, not instructions, the same way as in Claude Code. Lessons flagged as suspicious when they were saved never appear.
+- Turn it off with `cachly.regelwissen`.
+
+---
+
 ## [0.12.10] – 2026-10-20 — *"The recall rule is the same text everywhere"*
 
 - **One text, checked by a test.** The rule the extension writes (recall before each task, learn after each fix) was a hand-made copy of the MCP setup text and had drifted: it lacked the `brain_predict` step before risky changes and had other wording. It is now word for word the block that `npx @cachly-dev/mcp-server init` writes. A test reads both sources and fails on any difference.
