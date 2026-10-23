@@ -2,6 +2,14 @@
 
 ---
 
+## [0.12.12] – 2026-10-23 — *"A new Brain starts with your project's history"*
+
+- **A Brain created by the extension no longer starts empty.** Until now only the MCP server read your project's git history into a new Brain, and only when it created the Brain itself. A Brain created here stayed empty, and so did the rule files from 0.12.11. Now the extension reads the last 30 commits of your project into an empty Brain right after setup, in the background.
+- It uses the same rules as the MCP server, from the same code: only into a Brain without lessons, only from your own repository (not your home folder or a package folder), at most 30 commits. Afterwards the rule files are refreshed at once.
+- Runs with the Node that ships with VS Code, so no separate Node install is needed. Your key is passed to it in the environment, never on the command line. The process ends after 3 minutes at the latest.
+- For installs that are already set up, the extension checks once at startup: if your Brain answers and has no lessons, it imports; if it has lessons, it never asks again. At most 3 attempts per Brain.
+- Off switch: environment variable `CACHLY_STARTWISSEN=0`.
+
 ## [0.12.11] – 2026-10-23 — *"Copilot sees your project's experience without asking for it"*
 
 - **Your Brain's lessons now reach Copilot and Cursor in every chat.** Neither assistant calls cachly on its own. Both load their rule files into every chat, so the extension now writes the most relevant lessons there: first the ones about the files you have open, then your project's critical warnings — at most 12, about 2,000 tokens.

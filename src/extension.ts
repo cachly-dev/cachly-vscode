@@ -3,6 +3,7 @@ import * as https from 'https';
 import * as http from 'http';
 import * as path from 'path';
 import * as fs from 'fs';
+import { spawn } from 'child_process';
 import {
   normalizeBaseUrl,
   classifyInstanceError,
@@ -24,6 +25,9 @@ import { bereinigeAltbestand, type AltbestandErgebnis } from './lib/altbestand';
 import { editorFassung, programmName } from './lib/programm';
 import { kontoPfad, liesKontoDatei, werteKontoAus } from './lib/konto';
 import { ergaenzeGitExclude, schreibeRegelwissen } from './lib/regelwissen';
+import {
+  STARTWISSEN_FRIST_MS, STARTWISSEN_VERSUCHE, startwissenAufruf, startwissenFaellig, startwissenSchluessel,
+} from './lib/startwissen';
 import {
   VERTRAUEN_BEFEHL, VERTRAUEN_STATUSLEISTE, VERTRAUEN_STATUSLEISTE_HILFE, VERTRAUEN_MELDUNG, VERTRAUEN_KNOPF,
   VERTRAUEN_CHAT_ANTWORT, ALTBESTAND_KNOPF, altbestandText, HEIM_KONFLIKT_MELDUNG, HEIM_KONFLIKT_ERSETZEN,
@@ -546,6 +550,11 @@ function activateFull(context: vscode.ExtensionContext): void {
       }),
     );
   }
+
+  // ── Start-Import der Git-Geschichte in ein leeres Brain (lib/startwissen.ts) ──
+  // Fuer Installationen, die schon eingerichtet sind; nach einer neuen Einrichtung
+  // stoesst writeWorkspaceFiles den Import selbst an.
+  setTimeout(() => void startwissenAnstossen(), 4000);
 
   // ── Auto-capture WIP context → fills the Brain's "Context Entries" ─────────────
   // The plugin captures what you're working on (once per file per session, heavily
@@ -2565,6 +2574,9 @@ export async function writeWorkspaceFiles(baseUrl: string, apiKey: string, insta
   const m = extensionContext.globalState.get<Record<string, string>>('gitRootInstanceMap', {});
   m[targetRoot] = instanceId;
   void extensionContext.globalState.update('gitRootInstanceMap', m);
+
+  // Ein neues Brain ist leer: die Git-Geschichte dieses Projekts einlesen (lib/startwissen.ts).
+  void startwissenAnstossen({ ordner: targetRoot, apiKey, instanceId, apiUrl: baseUrl });
   return copilot;
 }
 
@@ -3667,6 +3679,64 @@ async function regelwissenAktualisieren(): Promise<void> {
     }
   } catch {
     // still — der naechste Dateiwechsel versucht es wieder
+  }
+}
+
+let startwissenLaeuft = false;
+
+/**
+ * Liest die Git-Geschichte des Projekts in ein leeres Brain ein, mit dem Hook-Buendel
+ * (lib/startwissen.ts). Hoechstens drei Versuche je Instanz. [vorgabe] kommt von einer
+ * frischen Einrichtung: Die Instanz startet dann evtl. noch, das Buendel wartet selbst
+ * auf sie. Ohne [vorgabe] (bestehende Installation) nur, wenn das Brain antwortet und
+ * leer ist. Danach werden die Regeldateien gleich aufgefrischt. Jeder Fehler bleibt still.
+ */
+async function startwissenAnstossen(
+  vorgabe?: { ordner: string; apiKey: string; instanceId: string; apiUrl: string },
+): Promise<void> {
+  if (startwissenLaeuft || !extensionContext || !vscode.workspace.isTrusted) return;
+  const config = vscode.workspace.getConfiguration('cachly');
+  const apiKey = vorgabe?.apiKey ?? config.get<string>('apiKey', '');
+  const instanceId = vorgabe?.instanceId ?? await getEffectiveInstanceId();
+  const ordner = vorgabe?.ordner ?? vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!isValidApiKey(apiKey) || !instanceId || !ordner) return;
+  const schluessel = startwissenSchluessel(instanceId);
+  const versuche = extensionContext.globalState.get<number>(schluessel);
+  if (!startwissenFaellig(versuche)) return;
+  const buendel = buendelPfad();
+  if (!fs.existsSync(buendel)) return;
+
+  if (!vorgabe) {
+    const h = await fetchBrainHealth().catch(() => undefined);
+    if (!h || (h.status !== 'empty' && h.status !== 'healthy')) return; // spaeter noch einmal
+    if (h.lessons > 0) {
+      // Das Brain hat schon Wissen: nie wieder fragen.
+      await extensionContext.globalState.update(schluessel, STARTWISSEN_VERSUCHE);
+      return;
+    }
+  }
+
+  startwissenLaeuft = true;
+  await extensionContext.globalState.update(schluessel, (versuche ?? 0) + 1);
+  const a = startwissenAufruf({
+    execPath: process.execPath, buendel, ordner, apiUrl: vorgabe?.apiUrl ?? apiBaseUrl(config),
+    apiKey, instanceId, env: process.env,
+  });
+  try {
+    const kind = spawn(a.befehl, a.argumente, { env: a.env, stdio: 'ignore', windowsHide: true });
+    // Hintergrundprozesse ueberleben sonst das Schliessen von VS Code.
+    const frist = setTimeout(() => { try { kind.kill(); } catch { /* schon beendet */ } }, STARTWISSEN_FRIST_MS);
+    const fertig = () => { clearTimeout(frist); startwissenLaeuft = false; };
+    kind.on('error', fertig);
+    kind.on('exit', (code) => {
+      fertig();
+      log(`start import finished (exit ${code})`);
+      // Die Regeldateien sollen die neuen Lektionen gleich zeigen, nicht erst in 3 min.
+      regelwissenZuletzt = 0;
+      void regelwissenAktualisieren();
+    });
+  } catch {
+    startwissenLaeuft = false;
   }
 }
 
