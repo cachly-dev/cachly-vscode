@@ -2,6 +2,12 @@
 
 ---
 
+## [0.12.13] – 2026-11-02 — *"Counted facts only: no money, no time-saved guess"*
+
+- **The extension no longer shows any money amount or "developer time saved" estimate.** A user saw "Cost saved: €1,000,000" in the panel. That number came from a guess (30–240 minutes per reused lesson, times an hourly rate) and did not hold up.
+- Removed: the "Developer time saved" and "Cost saved" rows in the Brain Health panel, the cost line in the @cachly chat status, the dollar amount in the first-hit message, and the setting `cachly.showCostSaved` (it had no effect on the status bar for some time).
+- Kept: counted facts (lessons, recalls, reuse by teammates in %, time to first payoff) and the token estimate, labelled as an estimate (about 1,200 tokens per reused lesson), without any currency.
+
 ## [0.12.12] – 2026-10-23 — *"A new Brain starts with your project's history"*
 
 - **A Brain created by the extension no longer starts empty.** Until now only the MCP server read your project's git history into a new Brain, and only when it created the Brain itself. A Brain created here stayed empty, and so did the rule files from 0.12.11. Now the extension reads the last 30 commits of your project into an empty Brain right after setup, in the background.

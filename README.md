@@ -68,7 +68,7 @@
 
 **With this extension:**
 - Status bar shows `🧠 42 lessons` at a glance — you know it's working
-- One click opens the full Brain health panel: storage, tier, recalls, cost saved
+- One click opens the full Brain health panel: storage, tier, recalls, estimated tokens saved
 - If the MCP server isn't connected, you get a clear nudge with setup instructions
 - You see **every lesson** the Brain stored — with what worked, what failed, and severity
 
@@ -78,7 +78,7 @@
 
 ### 🧠 Status Bar — Always-on brain gauge
 ```
-🧠 42 lessons  ·  ~$0.84 saved  ·  ✅ healthy
+🧠 Brain: 42 lessons · 120 recalls · ~144k tok
 ```
 Visible every second you're coding. Click to open the full panel. Zero effort, zero noise.
 
@@ -86,8 +86,7 @@ Visible every second you're coding. Click to open the full panel. Zero effort, z
 One click reveals everything:
 - **Lesson count** — total lessons your Brain has stored
 - **Recall count** — how many times your AI retrieved a lesson from the Brain
-- **Tokens saved** — estimated LLM tokens the Brain avoided regenerating
-- **Cost saved** — estimated $ saved from cached context recall
+- **Tokens saved (estimate)** — about 1,200 tokens per reused lesson; an estimate, not a measurement
 - **Storage bar** — % of your tier's storage used at a glance
 - **Brain IQ** — IQ Boost % and Crystal freshness when `brain_doctor` is active
 - **Last session** — timestamp of the most recent Brain interaction
@@ -145,7 +144,7 @@ This signs you in, detects your editors (GitHub Copilot, Cursor, Windsurf, etc.)
 |-----------|-------------------|----------------|
 | Is my Brain actually working? | No idea | `🧠 42 lessons ✅` in status bar |
 | Did the AI just learn something? | Check terminal logs | Panel updates live |
-| Tokens/money saved? | Invisible | Shown in health panel |
+| Tokens saved? | Invisible | Shown in health panel |
 | MCP server disconnected | Silent failure | Clear nudge + fix instructions |
 | What has my AI learned? | Can't see it | Full lessons list in editor |
 | Brain storage full? | Surprise error | Warning in panel |
@@ -188,7 +187,6 @@ The canonical command-to-capability map for this extension is generated from
 | `cachly.instanceId` | — | Brain instance ID (auto-set by `npx @cachly-dev/mcp-server@latest autopilot`) |
 | `cachly.refreshInterval` | `300` | Auto-refresh interval in seconds |
 | `cachly.showStatusBar` | `true` | Show/hide the status bar item |
-| `cachly.showCostSaved` | `true` | Show estimated cost savings in the status bar |
 | `cachly.ambientLearning` | `true` | Enable automatic pattern detection and lesson prompts |
 | `cachly.codeLens` | `true` | Show Brain lesson hints at the top of matching files |
 

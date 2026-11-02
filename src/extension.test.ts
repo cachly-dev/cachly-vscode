@@ -439,3 +439,29 @@ describe('Altbestand beim Start (Projekt aus 0.12.6)', () => {
     ext.deactivate();
   });
 });
+
+// ── Keine Geld- und Zeitschaetzung im Panel ─────────────────────────────────
+
+describe('Brain-Health-Panel zeigt kein Geld und keine Zeitersparnis-Schaetzung', () => {
+  it('auch wenn die API noch alte Felder (dollars_saved, minutes_saved) liefert', async () => {
+    const { ext } = await lade();
+    const health = {
+      lessons: 12, contexts: 3, lastSession: null, status: 'healthy', tier: 'free',
+      totalRecalls: 40, recallLimit: -1, estimatedTokensSaved: 48000,
+      topLessons: [], topics: [], memoryUsedBytes: 0, memoryLimitBytes: 0, memoryUsedPct: 0,
+      iqBoostPct: 0, teamAuthors: ['a', 'b'], crystal: null, pendingLessons: 0,
+      goodwillMessage: null, notice: null,
+      insights: {
+        recalls_total: 40, reuse_pct: 25, ttfr_p50_sec: 3600, ttfr_p90_sec: 7200,
+        minutes_saved: 60000, dollars_saved: 1000000, currency: 'EUR', hourly_rate: 75,
+      },
+    };
+    const html = ext.buildHealthHtml(health as never);
+    expect(html).not.toMatch(/€|\$\s?\d|\bEUR\b|\bUSD\b/);
+    expect(html).not.toMatch(/cost saved/i);
+    expect(html).not.toMatch(/time saved/i);
+    expect(html).not.toContain('1,000,000');
+    expect(html).toContain('First payoff');
+    expect(html).toContain('25.0%');
+  });
+});

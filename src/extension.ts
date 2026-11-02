@@ -74,7 +74,6 @@ interface BrainHealth {
   totalRecalls: number;
   recallLimit: number; // -1 = unlimited
   estimatedTokensSaved: number;
-  estimatedCostSaved: number;
   topLessons: TopLesson[];
   topics: string[];
   memoryUsedBytes: number;
@@ -90,34 +89,19 @@ interface BrainHealth {
 }
 
 interface BrainInsights {
-  minutes_saved: number;
-  dollars_saved: number;
   recalls_total: number;
   reuse_pct: number;
   ttfr_p50_sec: number;
   ttfr_p90_sec: number;
-  currency: string;
-  hourly_rate: number;
 }
 
-// ~$3 per 1M tokens (GPT-4o input blended rate)
+// Token estimate only (never shown as money): ~1,200 tokens per reused lesson.
 const TOKENS_PER_RECALL = 1200;
-const COST_PER_TOKEN = 0.000003;
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `~${(n / 1_000_000).toFixed(1)}M tokens`;
   if (n >= 1_000)     return `~${(n / 1_000).toFixed(0)}k tokens`;
   return `~${n} tokens`;
-}
-
-function fmtMoney(amount: number, currency: string): string {
-  const code = currency.toUpperCase() === 'EUR' ? 'EUR' : 'USD';
-  return new Intl.NumberFormat(code === 'EUR' ? 'de-DE' : 'en-US', {
-    style: 'currency',
-    currency: code,
-    minimumFractionDigits: 2,
-    maximumFractionDigits: 2,
-  }).format(amount);
 }
 
 function fmtDuration(seconds: number): string {
@@ -801,7 +785,6 @@ async function updateStatusBar() {
       health.totalRecalls = snapshot.totalRecalls;
       health.recallLimit = snapshot.recallLimit;
       health.estimatedTokensSaved = snapshot.estimatedTokensSaved;
-      health.estimatedCostSaved = snapshot.estimatedTokensSaved * COST_PER_TOKEN;
       health.status = 'degraded';
       showingSnapshot = true;
     } else if (health.lessons > 0 || health.totalRecalls > 0) {
@@ -876,7 +859,7 @@ async function updateStatusBar() {
         `**🧠 Brain active — learning from your work**\n\n` +
         `- 📚 **${health.lessons}** lessons remembered\n` +
         `- 🔁 **${health.totalRecalls}** recalls ${monthly ? `of ${health.recallLimit} this month` : 'all-time'}\n` +
-        (health.estimatedTokensSaved >= 1000 ? `- 💰 ${fmtTokens(health.estimatedTokensSaved)} saved (est. ~${TOKENS_PER_RECALL} tok per reused lesson)\n` : '') +
+        (health.estimatedTokensSaved >= 1000 ? `- 📊 ${fmtTokens(health.estimatedTokensSaved)} saved (est. ~${TOKENS_PER_RECALL} tok per reused lesson)\n` : '') +
         (sessionInjections > 0 ? `- 🔬 Ambient recall (session): ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected\n` : '') +
         (health.status === 'degraded'
           ? (showingSnapshot
@@ -902,7 +885,7 @@ async function updateStatusBar() {
       const lesson = health.topLessons[0];
       await extensionContext.globalState.update(firstHitKey, true);
       const action = await vscode.window.showInformationMessage(
-        `🎉 First Brain hit! Recalled "${lesson.topic}" — saved ~1,200 tokens (~$0.004). Your AI won't re-research this again.`,
+        `🎉 First Brain hit! Recalled "${lesson.topic}" — saved ~1,200 tokens. Your AI won't re-research this again.`,
         'Show Brain',
         'Dismiss',
       );
@@ -932,7 +915,7 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
   const result: BrainHealth = {
     lessons: 0, contexts: 0, lastSession: null,
     status: 'unreachable', tier: 'unknown',
-    totalRecalls: 0, recallLimit: -1, estimatedTokensSaved: 0, estimatedCostSaved: 0,
+    totalRecalls: 0, recallLimit: -1, estimatedTokensSaved: 0,
     topLessons: [], topics: [],
     memoryUsedBytes: 0, memoryLimitBytes: 0, memoryUsedPct: 0,
     iqBoostPct: 0, teamAuthors: [], crystal: null,
@@ -995,7 +978,6 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     result.goodwillMessage = memData.goodwill_message || null;
     result.notice = memData.notice || null;
     result.estimatedTokensSaved = result.totalRecalls * TOKENS_PER_RECALL;
-    result.estimatedCostSaved = result.estimatedTokensSaved * COST_PER_TOKEN;
     result.iqBoostPct = memData.iq_boost_pct ?? 0;
     result.teamAuthors = memData.team_authors ?? [];
     result.crystal = memData.crystal ?? null;
@@ -1014,7 +996,7 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
   // Insights (best-effort — graceful 404/error means endpoint not yet available)
   try {
     const insightsData = await apiGet(`${baseUrl}/api/v1/insights`, apiKey) as BrainInsights | null;
-    if (insightsData && typeof insightsData.minutes_saved === 'number') {
+    if (insightsData && typeof insightsData.recalls_total === 'number') {
       result.insights = insightsData;
     }
   } catch { /* insights endpoint unavailable — ignore */ }
@@ -1174,7 +1156,6 @@ function registerChatParticipant(context: vscode.ExtensionContext): void {
         `- **Contexts:** ${h.contexts}\n` +
         `- **Total recalls:** ${h.totalRecalls}\n` +
         `- **Tier:** ${h.tier}\n` +
-        (h.estimatedCostSaved > 0 ? `- **Est. cost saved:** $${h.estimatedCostSaved.toFixed(2)}\n` : '') +
         (h.lastSession ? `- **Last session:** ${h.lastSession}\n` : ''),
       );
       return {};
@@ -3236,7 +3217,7 @@ function esc(s: string): string {
   return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;').replace(/"/g, '&quot;');
 }
 
-function buildHealthHtml(health: BrainHealth): string {
+export function buildHealthHtml(health: BrainHealth): string {
   const statusLabel = health.status === 'healthy' ? '✅ Healthy'
     : health.status === 'empty' ? '🌱 Ready (no lessons yet)'
     : health.status === 'setup_needed' ? '🔐 Re-auth needed'
@@ -3319,25 +3300,17 @@ function buildHealthHtml(health: BrainHealth): string {
   const metaLine = `<p class="meta">${statusLabel} · Tier <strong>${esc(health.tier)}</strong>${
     health.lastSession ? ` · Last session: <em>${esc(health.lastSession.slice(0, 110))}${health.lastSession.length > 110 ? '…' : ''}</em>` : ''}</p>`;
 
-  // ── Value estimate — every number here is a labeled heuristic, never
-  // presented as measured fact (the fastest way to lose user trust is a
-  // "€3,300 saved" line that can't survive one skeptical question). ──
+  // ── Reuse facts — only measured numbers here (time to first payoff).
+  // No money and no time-saved estimate: neither survives a skeptical question. ──
   let roiSection = '';
   if (health.insights) {
     const ins = health.insights;
     const rows: string[] = [];
-    if (ins.minutes_saved > 0) {
-      rows.push(`<tr><td>Developer time saved</td><td><strong>${fmtDuration(ins.minutes_saved * 60)}</strong></td><td class="hint">heuristic: 30–240 min per reused lesson, weighted by severity</td></tr>`);
-    }
-    if (ins.dollars_saved > 0) {
-      rows.push(`<tr><td>Cost saved</td><td><strong>${fmtMoney(ins.dollars_saved, ins.currency)}</strong></td><td class="hint">at ${fmtMoney(ins.hourly_rate, ins.currency)}/h — adjust your rate at cachly.dev/team</td></tr>`);
-    }
     if (ins.ttfr_p50_sec > 0) {
       rows.push(`<tr><td>Time to first payoff</td><td><strong>${fmtDuration(ins.ttfr_p50_sec)}</strong></td><td class="hint">from Brain creation until a saved lesson was first reused</td></tr>`);
     }
     if (rows.length > 0) {
-      roiSection = `<h2>💰 Value estimate</h2>
-        <p class="hint">Estimates derived from recall activity — not measured billing data.</p>
+      roiSection = `<h2>⏱ First payoff</h2>
         <table>${rows.join('')}</table>`;
     }
   }
