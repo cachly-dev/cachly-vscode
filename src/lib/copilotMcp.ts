@@ -294,6 +294,15 @@ export async function bindeCopilotAn(e: AnbindungsEingabe, dateien: DateiZugriff
  * Server beim naechsten Chat von selbst, davor per "Start" in der Datei.
  * Claude Code liest `.mcp.json` nur beim Start einer Sitzung.
  */
+/**
+ * Darf sich der Nachhol-Weg (checkMcpSetupAndNudge) als erledigt merken?
+ * Nicht, solange kein (vertrauter) Ordner offen war: Dann wurde nichts
+ * geschrieben, und der naechste Start mit Ordner soll es nachholen.
+ */
+export function nachholenErledigt(a: CopilotAnbindung | undefined): boolean {
+  return a?.weg !== 'kein-ordner';
+}
+
 export function verbindungsSatz(a: CopilotAnbindung | undefined): string {
   switch (a?.weg) {
     case 'mcp-json':

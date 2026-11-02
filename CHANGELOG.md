@@ -2,6 +2,10 @@
 
 ---
 
+## [0.12.14] – 2026-11-02 — *"Your AI files arrive with your first project folder"*
+
+- **If no folder was open at the first start, the extension now writes the AI files later.** It writes `.mcp.json`, `.vscode/mcp.json`, `CLAUDE.md` and the other files that tell your AI to check your Brain first. Until now it remembered this step as done even when nothing was written, so opening a project later changed nothing. Now the next start with an open, trusted folder writes them.
+
 ## [0.12.13] – 2026-11-02 — *"Counted facts only: no money, no time-saved guess"*
 
 - **The extension no longer shows any money amount or "developer time saved" estimate.** A user saw "Cost saved: €1,000,000" in the panel. That number came from a guess (30–240 minutes per reused lesson, times an hourly rate) and did not hold up.

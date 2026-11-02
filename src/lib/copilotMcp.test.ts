@@ -9,6 +9,7 @@ import {
   hatCachlyEintrag,
   hatCopilot,
   liestWurzelMcpJson,
+  nachholenErledigt,
   nodeDateiZugriff,
   schluesselDateiPfad,
   verbindungsSatz,
@@ -266,6 +267,18 @@ describe('bindeCopilotAn (real files in a temp folder)', () => {
     const a = await bindeCopilotAn(eingabe({ vscodeVersion: '1.104.0' }), zugriff);
     expect(a).toMatchObject({ weg: 'vscode-mcp-json', startetSelbst: false });
     expect(verbindungsSatz(a)).toContain('"Start"');
+  });
+});
+
+describe('nachholenErledigt', () => {
+  it('keeps the catch-up open while no trusted folder was open, so the next start writes the files', () => {
+    expect(nachholenErledigt({ weg: 'kein-ordner' })).toBe(false);
+  });
+
+  it('counts as done once files were written or Copilot is not there', () => {
+    expect(nachholenErledigt({ weg: 'mcp-json', startetSelbst: true })).toBe(true);
+    expect(nachholenErledigt({ weg: 'kein-copilot' })).toBe(true);
+    expect(nachholenErledigt(undefined)).toBe(true);
   });
 });
 

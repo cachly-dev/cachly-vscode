@@ -12,7 +12,7 @@ import {
   parseJsonc,
   type BrainStatus,
 } from './lib/config';
-import { bindeCopilotAn, verbindungsSatz, type CopilotAnbindung } from './lib/copilotMcp';
+import { bindeCopilotAn, nachholenErledigt, verbindungsSatz, type CopilotAnbindung } from './lib/copilotMcp';
 import {
   pruefeSchluesselQuelle, pruefeApiAdresse, starteKeycloakAnmeldung, warteAufKeycloakAnmeldung, uebernimm, brainImKonto,
   erfolgsText, fehlerText, type Post, type Get,
@@ -3587,12 +3587,16 @@ async function checkMcpSetupAndNudge(context: vscode.ExtensionContext): Promise<
   }
 
   // No MCP config found — auto-write it for zero-friction setup
-  await context.globalState.update('mcpNudgeShown', true);
   const instanceId2 = config.get<string>('instanceId', '') || await getEffectiveInstanceId();
   const baseUrl2 = apiBaseUrl(config);
   if (instanceId2) {
     try {
       const copilot = await writeWorkspaceFiles(baseUrl2, apiKey, instanceId2);
+      // Ohne (vertrauten) Ordner wurde nichts geschrieben. Die Marke wurde frueher
+      // VOR dem Schreiben gesetzt — wer beim ersten Start keinen Ordner offen
+      // hatte, bekam die KI-Dateien nie. Jetzt holt der naechste Start es nach.
+      if (!nachholenErledigt(copilot)) return;
+      await context.globalState.update('mcpNudgeShown', true);
       void vscode.window.showInformationMessage(
         `🧠 cachly: MCP wired to your AI editor! ${verbindungsSatz(copilot)}`,
         'Show Brain',
@@ -3600,6 +3604,7 @@ async function checkMcpSetupAndNudge(context: vscode.ExtensionContext): Promise<
       return;
     } catch { /* non-fatal — fall through to nudge */ }
   }
+  await context.globalState.update('mcpNudgeShown', true);
   void vscode.window.showInformationMessage(
     '🧠 cachly Brain is connected, but your AI editor isn\'t using it yet. Connect Claude Code, Cursor, or Windsurf in 30 seconds.',
     'Connect AI Editor',
