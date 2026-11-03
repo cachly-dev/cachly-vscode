@@ -114,19 +114,33 @@ export function instanceUrl(baseUrl: string, instanceId: string): string {
  *     .git/hooks/post-commit, a file inside the project folder. `cls-ingest`
  *     resolves its key at run time (env, then ~/.cachly/credentials.json).
  *
- * Kept in sync with sdk/mcp/src/cls-hook.ts.
+ * Kept in sync with sdk/mcp/src/cls-hook.ts (test: config.test.ts liest dort
+ * CLS_NODE_PROGRAM und vergleicht).
+ *
+ * v4 (03.11.2026): v3 rief `execFileSync('npx', …)` ohne Shell — unter Windows
+ * ist npx aber npx.cmd, Node meldet ENOENT, und `catch{}` schluckte es. Unter
+ * Windows kam kein Commit im Brain an. v4 startet npm's npx-cli.js mit dem
+ * laufenden node selbst (Begruendung und Messung: sdk/mcp/src/cls-hook.ts).
  */
-export const CLS_HOOK_VERSION = 'v3';
+export const CLS_HOOK_VERSION = 'v4';
+
+export const CLS_NODE_PROGRAM =
+  "try{" +
+  "var cp=require('child_process'),pa=require('path'),fs=require('fs');" +
+  "var p={instance_id:process.env.CACHLY_BRAIN_INSTANCE_ID,source:'git_commit'," +
+  "payload:{message:process.env.CLS_MSG||'',sha:process.env.CLS_SHA||''," +
+  "files:(process.env.CLS_FILES||'').split(',').filter(Boolean)}};" +
+  "var a=['-y','@cachly-dev/mcp-server@latest','cls-ingest',JSON.stringify(p)];" +
+  "var o={stdio:'ignore',timeout:30000};" +
+  "var d=pa.dirname(process.execPath);" +
+  "var c=[pa.join(d,'node_modules','npm','bin','npx-cli.js'),pa.join(d,'..','lib','node_modules','npm','bin','npx-cli.js')]" +
+  ".filter(function(f){return fs.existsSync(f)})[0];" +
+  "if(c){cp.execFileSync(process.execPath,[c].concat(a),o)}" +
+  "else if(process.platform!=='win32'){cp.execFileSync('npx',a,o)}" +
+  "}catch(e){}";
 
 export function buildClsPostCommitHook(instanceId: string): string {
-  const nodeProgram =
-    "try{" +
-    "var p={instance_id:process.env.CACHLY_BRAIN_INSTANCE_ID,source:'git_commit'," +
-    "payload:{message:process.env.CLS_MSG||'',sha:process.env.CLS_SHA||''," +
-    "files:(process.env.CLS_FILES||'').split(',').filter(Boolean)}};" +
-    "require('child_process').execFileSync('npx',['@cachly-dev/mcp-server@latest','cls-ingest',JSON.stringify(p)]," +
-    "{stdio:'ignore',timeout:8000});" +
-    "}catch(e){}";
+  const nodeProgram = CLS_NODE_PROGRAM;
   return [
     `#!/bin/sh`,
     `# cachly CLS — Continuous Learning Stream ${CLS_HOOK_VERSION} (installed by Cachly VS Code extension)`,

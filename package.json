@@ -2,7 +2,7 @@
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
   "description": "ChatGPT and Claude remember your conversations — cachly remembers your codebase. The bug you fixed, why you chose Postgres, the deploy step that always breaks. Free trial without an account.",
-  "version": "0.12.14",
+  "version": "0.12.15",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
   "galleryBanner": {
@@ -100,6 +100,7 @@
         "cachly.apiKey": {
           "type": "string",
           "default": "",
+          "scope": "machine",
           "description": "Your Cachly API key (cky_live_...)"
         },
         "cachly.instanceId": {
@@ -220,7 +221,7 @@
           {
             "id": "cachly.connect",
             "title": "Connect your Brain",
-            "description": "One click to start a free trial or paste an existing API key. The status bar will turn green when your Brain is online.\n[Connect Brain](command:cachly.setup)\n\nAlready have a key? [Open Settings](command:workbench.action.openSettings?%5B%22cachly%22%5D)",
+            "description": "The extension creates a test Brain by itself when it starts. You can also paste an existing API key. When the status bar shows \"Brain: N lessons · X recalls\", you are connected.\n[Connect Brain](command:cachly.setup)\n\nAlready have a key? [Open Settings](command:workbench.action.openSettings?%5B%22cachly%22%5D)",
             "media": {
               "markdown": "media/walkthrough/connect.md"
             },

@@ -47,6 +47,9 @@ interface Anfrage { methode: string; url: string; authorization?: string }
 let server: http.Server;
 let attrappeUrl = '';
 const anfragen: Anfrage[] = [];
+let trialOhneInstanz = false;
+/** 03.11.2026: wenn gesetzt, antwortet die Attrappe auf Instanz- und Speicher-Abfragen (fuer den Statusleisten-Test). */
+let gesundesBrain = false;
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
@@ -56,9 +59,13 @@ beforeAll(async () => {
       res.setHeader('Content-Type', 'application/json');
       if (req.method === 'POST' && req.url === '/auth/instant-trial') {
         res.end(JSON.stringify({
-          api_key: TRIAL_KEY, instance_id: TRIAL_INSTANZ, trial: true,
+          api_key: TRIAL_KEY, instance_id: trialOhneInstanz ? undefined : TRIAL_INSTANZ, trial: true,
           trial_ends_at: new Date(Date.now() + 14 * 864e5).toISOString(),
         }));
+      } else if (gesundesBrain && req.method === 'GET' && req.url === `/api/v1/instances/${INSTANZ}`) {
+        res.end(JSON.stringify({ tier: 'free' }));
+      } else if (gesundesBrain && req.method === 'GET' && req.url === `/api/v1/instances/${INSTANZ}/memory`) {
+        res.end(JSON.stringify({ lesson_count: 5, total_recall_count: 3, top_lessons: [{ topic: 'deploy:regel', recall_count: 3 }] }));
       } else {
         res.statusCode = 404;
         res.end('{}');
@@ -86,6 +93,8 @@ function neuesProjekt(): string {
 
 beforeEach(() => {
   anfragen.length = 0;
+  trialOhneInstanz = false;
+  gesundesBrain = false;
   heim = tmp('heim');
   (globalThis as { __CACHLY_TEST_HOME?: string }).__CACHLY_TEST_HOME = heim;
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
@@ -297,7 +306,7 @@ describe('Schreibwege der Erweiterung (writeWorkspaceFiles)', () => {
     expect(skript).toContain("await import('./cachly-ambient-einblendung.mjs');");
     expect(skript).not.toContain('npx');
     const git = fs.readFileSync(path.join(root, '.git', 'hooks', 'post-commit'), 'utf8');
-    expect(git).toContain('Continuous Learning Stream v3');
+    expect(git).toContain('Continuous Learning Stream v4');
     expect(git).not.toContain('CACHLY_JWT');
     ext.deactivate();
   });
@@ -460,8 +469,213 @@ describe('Brain-Health-Panel zeigt kein Geld und keine Zeitersparnis-Schaetzung'
     expect(html).not.toMatch(/€|\$\s?\d|\bEUR\b|\bUSD\b/);
     expect(html).not.toMatch(/cost saved/i);
     expect(html).not.toMatch(/time saved/i);
+    // 03.11.2026: auch keine Token-Schaetzung als Tatsache
+    expect(html).not.toMatch(/tokens? saved/i);
+    expect(html).not.toContain('48k');
     expect(html).not.toContain('1,000,000');
     expect(html).toContain('First payoff');
     expect(html).toContain('25.0%');
+  });
+});
+// ── Befunde vscode-1 bis vscode-9 (03.11.2026) ───────────────────────────────
+
+describe('vscode-1: Arbeitsordner mit eigenem .git, aeusseres Repo darueber', () => {
+  function verschachtelt() {
+    const parent = tmp('aussen');
+    fs.mkdirSync(path.join(parent, '.git'), { recursive: true });
+    const proj = path.join(parent, 'proj');
+    fs.mkdirSync(path.join(proj, '.git'), { recursive: true });
+    fs.writeFileSync(path.join(proj, '.git', 'config'), '[remote "origin"]\n\turl = https://github.com/acme/app.git\n');
+    return { parent, proj };
+  }
+
+  it('findGitRoot nimmt bei einem Ordner den Ordner selbst, bei einer Datei den Ordner darueber', async () => {
+    const { parent, proj } = verschachtelt();
+    const { ext } = await lade();
+    expect(await ext.findGitRoot(proj)).toBe(proj);
+    expect(await ext.findGitRoot(path.join(proj, 'src', 'a.ts'))).toBe(proj);
+    expect(await ext.findGitRoot(path.join(parent, 'andere', 'b.ts'))).toBe(parent);
+  });
+
+  it('ohne offene Datei landen die Dateien im Projekt, nicht im aeusseren Repo', async () => {
+    const { parent, proj } = verschachtelt();
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [proj];
+    ext.activate(kontext());
+    await ext.writeWorkspaceFiles(attrappeUrl, LIVE_KEY, INSTANZ);
+    expect(fs.existsSync(path.join(proj, '.mcp.json'))).toBe(true);
+    expect(fs.existsSync(path.join(parent, '.mcp.json'))).toBe(false);
+    expect(fs.existsSync(path.join(parent, 'CLAUDE.md'))).toBe(false);
+    ext.deactivate();
+  });
+});
+
+describe('vscode-2: kaputte .mcp.json', () => {
+  it('bleibt unveraendert; eine Warnung erscheint', async () => {
+    const root = neuesProjekt();
+    const kaputt = '{ "mcpServers": { "mine": { "command": "x" }, } oops';
+    fs.writeFileSync(path.join(root, '.mcp.json'), kaputt);
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [root];
+    ext.activate(kontext());
+    await ext.writeWorkspaceFiles(attrappeUrl, LIVE_KEY, INSTANZ);
+    expect(fs.readFileSync(path.join(root, '.mcp.json'), 'utf8')).toBe(kaputt);
+    expect(fake.zustand.meldungen.some((m) => m.art === 'warn' && /\.mcp\.json could not be read/.test(m.text))).toBe(true);
+    ext.deactivate();
+  });
+});
+
+describe('vscode-3: Reconnect', () => {
+  it('startet eine neue Anmeldung und nutzt den alten Schluessel nicht weiter', async () => {
+    const { fake, ext } = await lade();
+    fake.zustand.config['cachly.apiKey'] = LIVE_KEY;
+    fake.zustand.config['cachly.instanceId'] = INSTANZ;
+    fake.zustand.antwort = (_t, knoepfe) => (knoepfe.includes('Reconnect') ? 'Reconnect' : undefined);
+    ext.activate(kontext());
+    anfragen.length = 0;
+    await ext.setupAICommand();
+    // die Attrappe kennt /auth/device nicht: der Ablauf versucht die Anmeldung und bricht mit Hinweis ab
+    expect(anfragen.some((a) => a.url === '/auth/device')).toBe(true);
+    expect(anfragen.some((a) => a.url === '/auth/instant-trial')).toBe(false);
+    expect(anfragen.some((a) => a.url === '/api/v1/instances/auto' || a.url === '/api/v1/api-keys')).toBe(false);
+    expect(fake.zustand.config['cachly.apiKey']).toBe(LIVE_KEY);
+    expect(fake.zustand.meldungen.some((m) => m.art === 'warn' && /current key is unchanged/.test(m.text))).toBe(true);
+    ext.deactivate();
+  });
+});
+
+describe('vscode-4: abgelehnte Lektionen', () => {
+  it('bei 404/401 vom Server stoppt das Senden der Warteschlange nach dem ersten Versuch; nichts geht verloren', async () => {
+    const { fake, ext } = await lade();
+    fake.zustand.config['cachly.apiKey'] = LIVE_KEY;
+    fake.zustand.config['cachly.instanceId'] = INSTANZ;
+    const ctx = kontext() as unknown as { globalState: { get(k: string, d?: unknown): unknown; update(k: string, v: unknown): Promise<void> } };
+    const lektion = (n: number) => ({ topic: `t${n}`, outcome: 'success', what_worked: 'w', source: 'vscode-manual', savedAt: n });
+    await ctx.globalState.update('cachly.offlineLessonQueue', [lektion(1), lektion(2), lektion(3)]);
+    ext.activate(ctx as never);
+    await vi.advanceTimersByTimeAsync(0);
+    anfragen.length = 0;
+    const gesendet = await ext.flushOfflineQueue();
+    expect(gesendet).toBe(0);
+    // Attrappe antwortet 404: jeder Durchlauf schickt nur EINE Lektion (ein Start-Durchlauf kann dazukommen)
+    expect(anfragen.filter((a) => a.url.endsWith('/learn')).length).toBeLessThanOrEqual(2);
+    expect((ctx.globalState.get('cachly.offlineLessonQueue') as unknown[]).length).toBe(3);
+    ext.deactivate();
+  });
+});
+
+describe('vscode-5: Schluessel nicht ueber Settings Sync', () => {
+  it('cachly.apiKey hat scope machine', () => {
+    const props = (JSON.parse(fs.readFileSync(path.join(ERWEITERUNG, 'package.json'), 'utf8')) as {
+      contributes: { configuration: { properties: Record<string, { scope?: string }> } };
+    }).contributes.configuration.properties;
+    expect(props['cachly.apiKey'].scope).toBe('machine');
+  });
+});
+
+describe('vscode-7: Test-Brain ohne Brain-Kennung', () => {
+  it('keine Erfolgsmeldung "trial started", keine Projektdateien, ehrlicher Hinweis mit Retry', async () => {
+    trialOhneInstanz = true;
+    const root = neuesProjekt();
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [root];
+    ext.activate(kontext());
+    await warteBis(() => fake.zustand.meldungen.some((m) => /could not be created/.test(m.text)), 'Hinweis ohne Brain');
+    expect(fake.zustand.meldungen.some((m) => /trial started/.test(m.text))).toBe(false);
+    const hinweis = fake.zustand.meldungen.find((m) => /could not be created/.test(m.text))!;
+    expect(hinweis.knoepfe).toEqual(['Retry']);
+    expect(fs.existsSync(path.join(root, '.mcp.json'))).toBe(false);
+    ext.deactivate();
+  });
+});
+
+describe('vscode-9: .vscode/settings.json des Nutzers', () => {
+  it('Kommentare bleiben; steht der Wert schon richtig da, wird die Datei nicht angefasst', async () => {
+    const root = neuesProjekt();
+    fs.mkdirSync(path.join(root, '.vscode'));
+    const datei = path.join(root, '.vscode', 'settings.json');
+    const gleich = `{\n  // meine Notiz\n  "editor.tabSize": 2,\n  "cachly.instanceId": "${INSTANZ}",\n}\n`;
+    fs.writeFileSync(datei, gleich);
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [root];
+    ext.activate(kontext());
+    await ext.writeWorkspaceFiles(attrappeUrl, LIVE_KEY, INSTANZ);
+    expect(fs.readFileSync(datei, 'utf8')).toBe(gleich);
+
+    fs.writeFileSync(datei, gleich.replace(INSTANZ, 'alt-alt'));
+    await ext.writeWorkspaceFiles(attrappeUrl, LIVE_KEY, INSTANZ);
+    const neu = fs.readFileSync(datei, 'utf8');
+    expect(neu).toContain('// meine Notiz');
+    expect(neu).toContain(`"cachly.instanceId": "${INSTANZ}"`);
+    ext.deactivate();
+  });
+});
+
+describe('vscode-9: Schluessel fehlt in .vscode/settings.json', () => {
+  async function schreibe(inhalt: string): Promise<string> {
+    const root = neuesProjekt();
+    fs.mkdirSync(path.join(root, '.vscode'));
+    const datei = path.join(root, '.vscode', 'settings.json');
+    fs.writeFileSync(datei, inhalt);
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [root];
+    ext.activate(kontext());
+    await ext.writeWorkspaceFiles(attrappeUrl, LIVE_KEY, INSTANZ);
+    ext.deactivate();
+    return fs.readFileSync(datei, 'utf8');
+  }
+
+  it('Datei mit Kommentaren: Kommentare und Formatierung bleiben, nur die Kennung kommt hinzu', async () => {
+    const alt = '{\n  // meine Notiz\n  "editor.tabSize": 2, /* wichtig */\n}\n';
+    const neu = await schreibe(alt);
+    expect(neu).toBe(`{\n  "cachly.instanceId": "${INSTANZ}",\n  // meine Notiz\n  "editor.tabSize": 2, /* wichtig */\n}\n`);
+  });
+
+  it('leere Datei und nur {}: Kennung wird gesetzt', async () => {
+    for (const alt of ['', '{}', '  \n']) {
+      const neu = await schreibe(alt);
+      expect(JSON.parse(neu)['cachly.instanceId']).toBe(INSTANZ);
+    }
+  });
+});
+
+describe('Statusleiste und Erstes-Treffer-Meldung zeigen keine Token-Zahlen', () => {
+  it('Text und Tooltip ohne "tok", Meldung ohne "1,200"', async () => {
+    gesundesBrain = true;
+    const root = neuesProjekt();
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [root];
+    fake.zustand.config['cachly.apiKey'] = LIVE_KEY;
+    fake.zustand.config['cachly.instanceId'] = INSTANZ;
+    ext.activate(kontext());
+    await warteBis(() => fake.zustand.statusEintraege.some((e) => /5 lessons/.test(e.text)), 'Statusleiste mit Zaehlern');
+    const e = fake.zustand.statusEintraege.find((x) => /5 lessons/.test(x.text))!;
+    const tooltip = String((e.tooltip as unknown as { value?: string })?.value ?? e.tooltip ?? '');
+    expect(e.text).toContain('Brain: 5 lessons');
+    expect(tooltip.length).toBeGreaterThan(0);
+    for (const s of [e.text, tooltip]) {
+      expect(s).not.toMatch(/\btoks?\b|tokens? saved/i);
+    }
+    await warteBis(() => fake.zustand.meldungen.some((m) => /First Brain hit/.test(m.text)), 'Erstes-Treffer-Meldung');
+    const m = fake.zustand.meldungen.find((x) => /First Brain hit/.test(x.text))!;
+    expect(m.text).not.toContain('1,200');
+    expect(m.text).not.toMatch(/tokens?/i);
+    ext.deactivate();
+  });
+});
+
+describe('vscode-8: CI-Host', () => {
+  it('github.com/me/gitlab-tools bekommt einen GitHub-Workflow, kein .gitlab-ci.yml', async () => {
+    const root = tmp('gitlab-name');
+    fs.mkdirSync(path.join(root, '.git'));
+    fs.writeFileSync(path.join(root, '.git', 'config'), '[remote "origin"]\n\turl = https://github.com/me/gitlab-tools.git\n');
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [root];
+    ext.activate(kontext());
+    await ext.writeWorkspaceFiles(attrappeUrl, LIVE_KEY, INSTANZ);
+    expect(fs.existsSync(path.join(root, '.github', 'workflows', 'cachly.yml'))).toBe(true);
+    expect(fs.existsSync(path.join(root, '.gitlab-ci.yml'))).toBe(false);
+    expect(fs.readFileSync(path.join(root, '.github', 'workflows', 'cachly.yml'), 'utf8')).toContain('cachly-action@v1');
+    ext.deactivate();
   });
 });

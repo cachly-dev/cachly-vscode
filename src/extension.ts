@@ -19,6 +19,7 @@ import {
 } from './lib/uebernahme';
 import { HOOK_BUENDEL } from './lib/ambient';
 import { fuegeInMcpJsonEin } from './lib/mcpJson';
+import { erkenneGitHost, ersetzeStringWert, fuegeStringWertEin } from './lib/gitHost';
 import { installiereAmbientHooks, installiereClsHook } from './lib/projektHooks';
 import { legeSchluesselImHeimAb, schluesselFingerabdruck, type HeimAblage } from './lib/schluessel';
 import { bereinigeAltbestand, type AltbestandErgebnis } from './lib/altbestand';
@@ -73,7 +74,6 @@ interface BrainHealth {
   tier: string;
   totalRecalls: number;
   recallLimit: number; // -1 = unlimited
-  estimatedTokensSaved: number;
   topLessons: TopLesson[];
   topics: string[];
   memoryUsedBytes: number;
@@ -94,9 +94,6 @@ interface BrainInsights {
   ttfr_p50_sec: number;
   ttfr_p90_sec: number;
 }
-
-// Token estimate only (never shown as money): ~1,200 tokens per reused lesson.
-const TOKENS_PER_RECALL = 1200;
 
 function fmtTokens(n: number): string {
   if (n >= 1_000_000) return `~${(n / 1_000_000).toFixed(1)}M tokens`;
@@ -140,7 +137,7 @@ function enqueueOfflineLesson(lesson: OfflineLesson): void {
   void extensionContext.globalState.update(OFFLINE_QUEUE_KEY, queue);
 }
 
-async function flushOfflineQueue(): Promise<number> {
+export async function flushOfflineQueue(): Promise<number> {
   if (!extensionContext) return 0;
   const queue = extensionContext.globalState.get<OfflineLesson[]>(OFFLINE_QUEUE_KEY, []);
   if (queue.length === 0) return 0;
@@ -160,8 +157,15 @@ async function flushOfflineQueue(): Promise<number> {
         source: lesson.source + '-offline-sync',
       });
       synced++;
-    } catch {
+    } catch (e) {
       failed.push(lesson);
+      // vscode-4: Schluessel/Brain abgelehnt: die uebrigen nicht ebenfalls abschicken.
+      // Alle Lektionen bleiben in der Warteschlange, bis ein gueltiger Schluessel da ist.
+      if (istAbgelehnt(e)) {
+        failed.push(...queue.slice(queue.indexOf(lesson) + 1));
+        log('offline queue: key or Brain rejected by server, flush stopped', (e as HttpError).status);
+        break;
+      }
     }
   }
 
@@ -246,7 +250,6 @@ interface HealthSnapshot {
   lessons: number;
   totalRecalls: number;
   recallLimit: number;
-  estimatedTokensSaved: number;
   ts: number;
 }
 let brainPanel: vscode.WebviewPanel | undefined;
@@ -276,9 +279,9 @@ let sessionActivatedAt = 0;
 // ── Ambient recall net-token accounting (Ambient Recall Tier B, §6.7) ──────────
 // The roadmap (§6.2) requires measuring the *net* token impact of pushing recall
 // into context — not just the gross injected cost. We record injected tokens at
-// the real injection surface (the @cachly participant streams lessons into chat)
-// and, per the extension's own ~TOKENS_PER_RECALL-saved-per-recall model, derive
-// a net estimate that is shown in the Brain Health panel and status-bar tooltip.
+// the real injection surface (the @cachly participant streams lessons into chat).
+// 03.11.2026: die frueher daraus abgeleitete Netto-Schaetzung (1.200 Token je
+// Abruf) ist entfernt; angezeigt wird nur Gemessenes.
 // Persisted cumulatively in globalState; the session view resets each activation.
 const AMBIENT_INJECTED_KEY = 'cachly.ambientInjectedTokens';
 const AMBIENT_INJECTIONS_KEY = 'cachly.ambientInjectionCount';
@@ -784,7 +787,6 @@ async function updateStatusBar() {
       health.lessons = snapshot.lessons;
       health.totalRecalls = snapshot.totalRecalls;
       health.recallLimit = snapshot.recallLimit;
-      health.estimatedTokensSaved = snapshot.estimatedTokensSaved;
       health.status = 'degraded';
       showingSnapshot = true;
     } else if (health.lessons > 0 || health.totalRecalls > 0) {
@@ -792,7 +794,6 @@ async function updateStatusBar() {
         lessons: health.lessons,
         totalRecalls: health.totalRecalls,
         recallLimit: health.recallLimit,
-        estimatedTokensSaved: health.estimatedTokensSaved,
         ts: Date.now(),
       };
       void extensionContext?.globalState.update(LAST_GOOD_HEALTH_KEY, next);
@@ -851,16 +852,13 @@ async function updateStatusBar() {
       const recallLabel = monthly
         ? `${health.totalRecalls}/${health.recallLimit} recalls`
         : `${health.totalRecalls} recalls`;
-      const tokenSuffix = health.estimatedTokensSaved >= 1000
-        ? ` · ${fmtTokens(health.estimatedTokensSaved).replace(' tokens', ' tok')}`
-        : '';
-      statusBarItem.text = `${icon} Brain: ${health.lessons} lessons · ${recallLabel}${tokenSuffix}`;
+      // 03.11.2026 (vscode-Nachtrag a): keine Token-Schaetzung in der Leiste, nur Gezaehltes.
+      statusBarItem.text = `${icon} Brain: ${health.lessons} lessons · ${recallLabel}`;
       statusBarItem.tooltip = new vscode.MarkdownString(
         `**🧠 Brain active — learning from your work**\n\n` +
         `- 📚 **${health.lessons}** lessons remembered\n` +
         `- 🔁 **${health.totalRecalls}** recalls ${monthly ? `of ${health.recallLimit} this month` : 'all-time'}\n` +
-        (health.estimatedTokensSaved >= 1000 ? `- 📊 ${fmtTokens(health.estimatedTokensSaved)} saved (est. ~${TOKENS_PER_RECALL} tok per reused lesson)\n` : '') +
-        (sessionInjections > 0 ? `- 🔬 Ambient recall (session): ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected\n` : '') +
+        (sessionInjections > 0 ? `- 🔬 Ambient recall (session): ${sessionInjections} lessons surfaced\n` : '') + // 03.11.2026: Token-Zahl ist geschaetzt (Zeichen/4), steht nur noch im Panel
         (health.status === 'degraded'
           ? (showingSnapshot
             ? `\n⚠️ _Showing last known counts — reconnecting to your Brain…_\n`
@@ -885,7 +883,7 @@ async function updateStatusBar() {
       const lesson = health.topLessons[0];
       await extensionContext.globalState.update(firstHitKey, true);
       const action = await vscode.window.showInformationMessage(
-        `🎉 First Brain hit! Recalled "${lesson.topic}" — saved ~1,200 tokens. Your AI won't re-research this again.`,
+        `🎉 First Brain hit! Recalled "${lesson.topic}". Your AI can use this lesson again.`,
         'Show Brain',
         'Dismiss',
       );
@@ -915,7 +913,7 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
   const result: BrainHealth = {
     lessons: 0, contexts: 0, lastSession: null,
     status: 'unreachable', tier: 'unknown',
-    totalRecalls: 0, recallLimit: -1, estimatedTokensSaved: 0,
+    totalRecalls: 0, recallLimit: -1,
     topLessons: [], topics: [],
     memoryUsedBytes: 0, memoryLimitBytes: 0, memoryUsedPct: 0,
     iqBoostPct: 0, teamAuthors: [], crystal: null,
@@ -977,7 +975,6 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     result.recallLimit = memData.recall_limit ?? -1;
     result.goodwillMessage = memData.goodwill_message || null;
     result.notice = memData.notice || null;
-    result.estimatedTokensSaved = result.totalRecalls * TOKENS_PER_RECALL;
     result.iqBoostPct = memData.iq_boost_pct ?? 0;
     result.teamAuthors = memData.team_authors ?? [];
     result.crystal = memData.crystal ?? null;
@@ -1320,6 +1317,7 @@ async function saveLessonCommand(prefillTopic?: string, prefillWhatWorked?: stri
   const persistLesson = async (topic: string, whatWorked: string, outcome: string) => {
     const source = prefillTopic ? 'vscode-ambient' : 'vscode-manual';
     const authorName = config.get<string>('authorName', '');
+    let abgelehnt = false;
     if (apiKey && instanceId) {
       try {
         await apiPost(`${baseUrl}/api/v1/instances/${instanceId}/learn`, apiKey, {
@@ -1330,14 +1328,21 @@ async function saveLessonCommand(prefillTopic?: string, prefillWhatWorked?: stri
         vscode.window.showInformationMessage(`🧠 Lesson saved: "${topic}"`);
         updateStatusBar();
         return;
-      } catch {
+      } catch (e) {
         // API unreachable — fall through to offline queue
+        abgelehnt = istAbgelehnt(e);
       }
     }
     // Offline fallback (no Brain connected, or API temporarily down)
     enqueueOfflineLesson({ topic, outcome, what_worked: whatWorked, source, savedAt: Date.now() });
     const queue = extensionContext.globalState.get<OfflineLesson[]>(OFFLINE_QUEUE_KEY, []);
-    if (!apiKey || !instanceId) {
+    if (abgelehnt) {
+      // vscode-4: nicht "wird automatisch erneut versucht" sagen, wenn es nie klappen wird.
+      void vscode.window.showWarningMessage(
+        `🧠 Lesson kept on this computer (${queue.length} total). The server did not accept your key or Brain, so it cannot be saved there yet.`,
+        'Connect Brain',
+      ).then(c => { if (c === 'Connect Brain') void setupAICommand(); });
+    } else if (!apiKey || !instanceId) {
       void vscode.window.showWarningMessage(
         `🧠 Lesson queued offline (${queue.length} total). Connect a Brain to sync it.`,
         'Connect Brain',
@@ -1621,8 +1626,15 @@ function diceSimilarity(a: string, b: string): number {
 
 // ── Git-root detection ────────────────────────────────────────────────────────
 
-async function findGitRoot(filePath: string): Promise<string | undefined> {
+export async function findGitRoot(filePath: string): Promise<string | undefined> {
+  // 03.11.2026 (vscode-1): Bekommt die Funktion einen ORDNER (Arbeitsordner ohne offene
+  // Datei), muss dieser Ordner selbst zuerst geprueft werden. Mit dirname() begann die
+  // Suche eine Ebene zu hoch und fand ein aeusseres Repo statt des geoeffneten Projekts.
   let dir = path.dirname(filePath);
+  try {
+    const st = await vscode.workspace.fs.stat(vscode.Uri.file(filePath));
+    if (st.type & vscode.FileType.Directory) dir = filePath;
+  } catch { /* Pfad nicht lesbar: wie eine Datei behandeln */ }
   const root = path.parse(dir).root;
   while (dir !== root) {
     try {
@@ -1804,6 +1816,17 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
   }
 
   // ── 6. Track + notify ─────────────────────────────────────────────────────
+  // 03.11.2026 (vscode-7): Ohne Brain-Kennung ist nichts angebunden. Dann keine
+  // Erfolgsmeldung und onboardingShown bleibt offen; stattdessen ein ehrlicher Hinweis.
+  if (!instanceId) {
+    log('auto setup: key stored, but no Brain instance could be created');
+    void vscode.window.showWarningMessage(
+      '🧠 Cachly: your key is saved, but the Brain could not be created yet. Nothing is connected to this project.',
+      'Retry',
+    ).then(a => { if (a === 'Retry') void setupAICommand(); });
+    startRefreshLoop();
+    return true;
+  }
   if (githubLogin) {
     trackVSCodeEvent('vscode_github_linked', { apiKey, instanceId, once: true });
     void vscode.window.showInformationMessage(
@@ -1880,7 +1903,7 @@ async function tryGitHubSilentAuth(
   }
 }
 
-async function setupAICommand() {
+export async function setupAICommand() {
   const config = vscode.workspace.getConfiguration('cachly');
   const BASE_URL = apiBaseUrl(config);
 
@@ -1889,12 +1912,18 @@ async function setupAICommand() {
   // If already wired up, confirm before re-configuring
   const existingKey = config.get<string>('apiKey', '');
   const existingInstance = await getEffectiveInstanceId();
+  // 03.11.2026 (vscode-3): Nach "Reconnect" lief bisher alles mit dem alten Schluessel
+  // weiter, weil jeder Anmeldeschritt an `!apiKey` hing. Jetzt beginnt der Ablauf leer,
+  // ueberspringt die stillen Wege (GitHub, Test-Brain) und geht in die Browser-Anmeldung.
+  // Der alte Schluessel bleibt in den Einstellungen, bis ein neuer ankommt.
+  let reconnect = false;
   if (existingKey && existingInstance) {
     const action = await vscode.window.showInformationMessage(
       '🧠 Cachly Brain is already connected to this workspace. Reconnect with a different account?',
       'Reconnect', 'Cancel',
     );
     if (action !== 'Reconnect') return;
+    reconnect = true;
   }
 
   let token = '';
@@ -1904,8 +1933,8 @@ async function setupAICommand() {
   // we obtain an OAuth token silently — no browser popup, no permission dialog —
   // and exchange it for a *real* (non-trial) cachly key + Brain instance.
   // This gives them a permanent account from minute 1, no "Link Account" needed.
-  let apiKey = config.get<string>('apiKey', '');
-  if (!apiKey) {
+  let apiKey = reconnect ? '' : config.get<string>('apiKey', '');
+  if (!apiKey && !reconnect) {
     const ghKey = await tryGitHubSilentAuth(BASE_URL);
     if (ghKey) {
       apiKey = ghKey.apiKey;
@@ -1938,7 +1967,7 @@ async function setupAICommand() {
    * shape keeps working.
    */
   type TrialResp = { api_key: string; instance_id: string; trial: boolean; trial_ends_at?: string; expires_at?: string };
-  if (!apiKey) {
+  if (!apiKey && !reconnect) {
     let trialResp: TrialResp | null = null;
     try {
       trialResp = await apiPostAnon(`${BASE_URL}/auth/instant-trial`, {}) as TrialResp | null;
@@ -2022,6 +2051,13 @@ async function setupAICommand() {
       apiKey = obtained;
       await config.update('apiKey', apiKey, vscode.ConfigurationTarget.Global);
     } else {
+      // vscode-3: Wer das Konto wechseln will, bekommt kein neues Test-Brain untergeschoben.
+      if (reconnect) {
+        void vscode.window.showWarningMessage(
+          '🧠 Cachly: could not start the sign-in. Your current key is unchanged. Please try again later.',
+        );
+        return;
+      }
       // Device flow unavailable — retry instant-trial once more (covers transient API restart),
       // then open dashboard as last resort. No paste-box: users should never need to copy keys.
       await new Promise<void>((r) => setTimeout(r, 2000));
@@ -2423,7 +2459,16 @@ export async function writeWorkspaceFiles(baseUrl: string, apiKey: string, insta
   try {
     rawMcp = Buffer.from(await vscode.workspace.fs.readFile(vscode.Uri.file(mcpPath))).toString('utf8');
   } catch { /* new file */ }
-  await writeFileContent(mcpPath, fuegeInMcpJsonEin(rawMcp, baseUrl, instanceId));
+  const mcpNeu = fuegeInMcpJsonEin(rawMcp, baseUrl, instanceId);
+  if (mcpNeu === undefined) {
+    // vscode-2 (03.11.2026): kaputte .mcp.json nicht ueberschreiben, sonst sind die anderen Server weg.
+    log('.mcp.json exists but is not valid JSON — left untouched', mcpPath);
+    void vscode.window.showWarningMessage(
+      'Cachly: your .mcp.json could not be read, so it was not changed. Fix the JSON, then run "Cachly: Set up" again.',
+    );
+  } else {
+    await writeFileContent(mcpPath, mcpNeu);
+  }
 
   // .vscode/mcp.json — only where Copilot cannot see .mcp.json (see lib/copilotMcp.ts).
   let copilot: CopilotAnbindung | undefined;
@@ -2517,11 +2562,14 @@ export async function writeWorkspaceFiles(baseUrl: string, apiKey: string, insta
   const settingsPath = path.join(vsDir, 'settings.json');
   let existing: Record<string, unknown> = {};
   let settingsReadOk = true;
+  let settingsText: string | undefined;
   try {
     const raw = await vscode.workspace.fs.readFile(vscode.Uri.file(settingsPath));
     // JSONC-tolerant: plain JSON.parse throws on comments/trailing commas, which
     // would reset `existing` to {} and WIPE the user's entire settings.json.
-    existing = parseJsonc(Buffer.from(raw).toString('utf8'));
+    settingsText = Buffer.from(raw).toString('utf8');
+    // Leere Datei = leeres Objekt (03.11.2026); sonst schluege JSON.parse('') fehl und der Schluessel kaeme nie hinein.
+    existing = settingsText.trim() === '' ? {} : parseJsonc(settingsText);
   } catch (e) {
     // Distinguish "file doesn't exist" (fine) from "file exists but unparseable"
     // (must NOT overwrite — that would destroy the user's settings).
@@ -2531,9 +2579,18 @@ export async function writeWorkspaceFiles(baseUrl: string, apiKey: string, insta
       log('settings.json exists but could not be parsed — not overwriting', (e as Error).message);
     } catch { /* truly new file */ }
   }
-  if (settingsReadOk) {
+  if (settingsReadOk && existing['cachly.instanceId'] !== instanceId) {
+    // vscode-9 (03.11.2026): Kommentare und Kommas des Nutzers bleiben. Steht der Wert schon
+    // richtig da, wird nichts geschrieben; steht er anders da, wird nur dieser Wert getauscht.
+    // Fehlt der Schluessel (Normalfall bei neuen Nutzern), wird er per Texteingriff eingefuegt,
+    // damit Kommentare und Formatierung bleiben; nur bei Nicht-Objekt/leer wird neu geschrieben.
+    const neu = settingsText !== undefined && 'cachly.instanceId' in existing
+      ? ersetzeStringWert(settingsText, 'cachly.instanceId', instanceId)
+      : settingsText !== undefined && settingsText.trim() !== ''
+        ? fuegeStringWertEin(settingsText, 'cachly.instanceId', instanceId)
+        : undefined;
     existing['cachly.instanceId'] = instanceId;
-    await writeFileContent(settingsPath, JSON.stringify(existing, null, 2));
+    await writeFileContent(settingsPath, neu ?? JSON.stringify(existing, null, 2));
   }
 
   // .git/hooks/post-commit — CLS (Continuous Learning Stream): auto-learns every
@@ -2684,13 +2741,8 @@ type CiHost = 'github' | 'gitlab' | undefined;
  * write nothing rather than guess). Never throws.
  */
 async function detectGitRemoteHost(targetRoot: string): Promise<CiHost> {
-  try {
-    const cfg = await fs.promises.readFile(path.join(targetRoot, '.git', 'config'), 'utf8');
-    const urls = [...cfg.matchAll(/url\s*=\s*(.+)/g)].map(m => m[1].toLowerCase());
-    if (urls.some(u => u.includes('gitlab.com') || u.includes('gitlab'))) return 'gitlab';
-    if (urls.some(u => u.includes('github.com') || u.includes('github'))) return 'github';
-  } catch { /* no .git/config — not a git repo or unreadable */ }
-  return undefined;
+  // vscode-8 (03.11.2026): Rechnername statt Teilstring, und .git-Dateien (Worktree, Submodul).
+  return erkenneGitHost(targetRoot);
 }
 
 const CI_BRAIN_MARKER = 'cachly-brain';
@@ -2750,7 +2802,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 20
-      - uses: cachly-dev/cachly-action@main
+      - uses: cachly-dev/cachly-action@v1
         with:
           mode: learn
           api-key: \${{ secrets.CACHLY_API_KEY }}
@@ -2761,7 +2813,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: cachly-dev/cachly-action@main
+      - uses: cachly-dev/cachly-action@v1
         with:
           mode: scan
           api-key: \${{ secrets.CACHLY_API_KEY }}
@@ -2777,7 +2829,7 @@ function buildGitlabInclude(instanceId: string): string {
 # Set CACHLY_API_KEY (masked) and confirm CACHLY_INSTANCE_ID in
 # Settings → CI/CD → Variables. Docs: https://cachly.dev/docs/gitlab
 include:
-  - remote: 'https://raw.githubusercontent.com/cachly-dev/cachly-action/main/templates/cachly.gitlab-ci.yml'
+  - remote: 'https://raw.githubusercontent.com/cachly-dev/cachly-action/v1/templates/cachly.gitlab-ci.yml'
 
 variables:
   CACHLY_INSTANCE_ID: "${instanceId}"
@@ -2931,6 +2983,14 @@ class HttpError extends Error {
     this.status = status;
     this.body = body;
   }
+}
+
+/**
+ * 03.11.2026 (vscode-4): Der Server hat Schluessel oder Brain abgelehnt (401/403/404).
+ * Ein neuer Versuch aendert daran nichts; erst ein neuer Schluessel hilft.
+ */
+export function istAbgelehnt(e: unknown): boolean {
+  return e instanceof HttpError && (e.status === 401 || e.status === 403 || e.status === 404);
 }
 
 // ── HTTP helpers ──
@@ -3283,11 +3343,6 @@ export function buildHealthHtml(health: BrainHealth): string {
           ? (overLimit ? 'monthly limit reached' : `${recallPct.toFixed(0)}% of the ${esc(health.tier)} monthly limit`)
           : 'unlimited plan — counter never resets'}</div>
       </div>
-      <div class="card">
-        <div class="card-label">Est. tokens saved ${scopeLabel}</div>
-        <div class="card-value">${fmtTokens(health.estimatedTokensSaved).replace('~', '')}</div>
-        <div class="card-sub">estimate: ~${TOKENS_PER_RECALL.toLocaleString()} tokens per reused lesson</div>
-      </div>
       ${health.memoryLimitBytes > 0 ? `
       <div class="card">
         <div class="card-label">Storage</div>
@@ -3341,14 +3396,9 @@ export function buildHealthHtml(health: BrainHealth): string {
     ? `<h2>💎 Memory Crystal</h2><blockquote>${esc(health.crystal.summary)}</blockquote><p class="hint">Generated ${esc(health.crystal.created_at)} · ${health.crystal.patterns_hit} patterns</p>`
     : '';
 
-  // Ambient recall net-token accounting (§6.2 "measure net, not gross"). Net =
-  // est. tokens the surfaced lessons save (~TOKENS_PER_RECALL each, the same
-  // model used for "Tokens Saved") minus the tokens injected to surface them.
-  // We show the injected cost openly — net can be negative if recall is noisy.
+  // Ambient recall: die eingespielten Token werden offen gezeigt (gemessen).
   const ambientInjectedTotal = extensionContext?.globalState.get<number>(AMBIENT_INJECTED_KEY, 0) ?? 0;
   const ambientInjectionsTotal = extensionContext?.globalState.get<number>(AMBIENT_INJECTIONS_KEY, 0) ?? 0;
-  const ambientSavedEst = ambientInjectionsTotal * TOKENS_PER_RECALL;
-  const ambientNet = ambientSavedEst - ambientInjectedTotal;
   const vorzeichen = (n: number) => `${n >= 0 ? '+' : '−'}${fmtTokens(Math.abs(n)).replace('~', '')}`;
   // GROW-024: the real account is the ledger the hooks write (lib/konto.ts),
   // per Brain instance — the same numbers as `ambient-stats`, negative too.
@@ -3360,7 +3410,7 @@ export function buildHealthHtml(health: BrainHealth): string {
     ...(konto.andereInstanzen > 0 ? [`entries of ${konto.andereInstanzen} other instance${konto.andereInstanzen === 1 ? '' : 's'}`] : []),
   ];
   const chatZeile = ambientInjectionsTotal > 0
-    ? `<p class="hint">@cachly chat: ${ambientInjectionsTotal.toLocaleString()} lessons surfaced · ${fmtTokens(ambientInjectedTotal)} injected · est. ${fmtTokens(ambientSavedEst)} saved (~${TOKENS_PER_RECALL}/lesson) · net ${vorzeichen(ambientNet)}. This session: ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected.</p>`
+    ? `<p class="hint">@cachly chat: ${ambientInjectionsTotal.toLocaleString()} lessons surfaced · ${fmtTokens(ambientInjectedTotal)} injected. This session: ${sessionInjections} surfaced · ~${sessionInjectedTokens} tok injected.</p>`
     : '';
   const ambientSection = `<h2>🔬 Ambient Recall — net token account</h2>
     ${konto.gemessen

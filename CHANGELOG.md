@@ -2,6 +2,22 @@
 
 ---
 
+## [0.12.15] – 2026-11-03 — *"No token guess, no lost settings"*
+
+Found by testers who walked the VS Code path for real, each finding checked by a second reviewer.
+
+- **On Windows, your commits now reach the Brain.** The git hook called `npx` directly; on Windows that is `npx.cmd`, Node could not start it, and the error was swallowed, so no commit ever arrived. The hook (v4, the same as in the MCP setup 0.10.227) starts npm's `npx-cli.js` with the running `node`. Existing cachly hooks are upgraded the next time the extension sets up the project.
+- **No token estimate anywhere.** The status bar suffix (`· 12.3k tok`), the tooltip line, the "First Brain hit … saved ~1,200 tokens" message and the "Est. tokens saved" card are gone. These were a fixed guess per recall, not a count. Lessons and recalls stay, and so do the measured hook numbers.
+- **Your other MCP servers are safe.** A `.mcp.json` that cannot be read is no longer replaced; the extension warns and leaves it alone. Before, a file with a syntax slip lost every other server in it.
+- **Files land in the folder you opened.** In a project inside a bigger git repository, the rule files went to the outer repository.
+- **Comments in `.vscode/settings.json` stay.** The extension changes only its own value, and an empty file counts as `{}`.
+- **The API key no longer travels with Settings Sync** (`cachly.apiKey` has machine scope).
+- **Saving a lesson that the server rejects (401, 403, 404) says so,** with a Connect button, instead of "queued, will retry automatically" forever.
+- **Connect with a different account works.** It used to reuse the old silent paths and changed nothing.
+- **No "trial started" message without a Brain.** If no Brain ID came back, you get a warning with Retry.
+- **CI setup reads the host from `origin` correctly,** also in worktrees and submodules.
+- **Walkthrough texts match what happens:** the test Brain is created on start, and the status bar shows "Brain: N lessons · X recalls".
+
 ## [0.12.14] – 2026-11-02 — *"Your AI files arrive with your first project folder"*
 
 - **If no folder was open at the first start, the extension now writes the AI files later.** It writes `.mcp.json`, `.vscode/mcp.json`, `CLAUDE.md` and the other files that tell your AI to check your Brain first. Until now it remembered this step as done even when nothing was written, so opening a project later changed nothing. Now the next start with an open, trusted folder writes them.

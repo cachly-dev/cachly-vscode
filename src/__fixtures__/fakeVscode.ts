@@ -65,6 +65,7 @@ export const Uri = {
   joinPath: (u: { fsPath: string }, ...teile: string[]) => uri(path.join(u.fsPath, ...teile)),
 };
 
+export const FileType = { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 };
 export const StatusBarAlignment = { Left: 1, Right: 2 };
 export const ConfigurationTarget = { Global: 1, Workspace: 2, WorkspaceFolder: 3 };
 export const ViewColumn = { Beside: -2, Active: -1, One: 1 };
@@ -128,7 +129,10 @@ export const workspace = {
       await fs.promises.writeFile(u.fsPath, inhalt);
     },
     async createDirectory(u: { fsPath: string }) { await fs.promises.mkdir(u.fsPath, { recursive: true }); },
-    async stat(u: { fsPath: string }) { return fs.promises.stat(u.fsPath); },
+    async stat(u: { fsPath: string }) {
+      const st = await fs.promises.stat(u.fsPath);
+      return { type: st.isDirectory() ? 2 : 1, size: st.size, mtime: st.mtimeMs, ctime: st.ctimeMs };
+    },
   },
 };
 

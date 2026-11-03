@@ -41,17 +41,23 @@ function istObjekt(v: unknown): v is Record<string, unknown> {
 
 /**
  * Setzt den cachly-Eintrag in den Text einer `.mcp.json` und laesst alle
- * anderen Server und Felder stehen. Fehlt die Datei oder laesst sie sich
- * nicht lesen, beginnt eine neue (wie bisher).
+ * anderen Server und Felder stehen. Fehlt die Datei oder ist sie leer, beginnt
+ * eine neue. Laesst sie sich nicht lesen, kommt undefined zurueck.
  */
-export function fuegeInMcpJsonEin(vorhanden: string | undefined, apiUrl: string, instanceId: string): string {
+export function fuegeInMcpJsonEin(vorhanden: string | undefined, apiUrl: string, instanceId: string): string | undefined {
   let daten: { mcpServers?: Record<string, unknown> } = {};
-  if (vorhanden !== undefined) {
+  // 03.11.2026 (vscode-2): Eine Datei, die da ist, sich aber nicht lesen laesst (Tippfehler,
+  // halb gespeichert), wird NICHT ersetzt: sonst gehen alle anderen MCP-Server des
+  // Nutzers still verloren. Rueckgabe undefined = nichts schreiben. Leer = neue Datei.
+  if (vorhanden !== undefined && vorhanden.trim() !== '') {
     try {
-      daten = parseJsonc(vorhanden) as typeof daten;
-    } catch { /* neue Datei oder kein JSON: neu beginnen */ }
+      const gelesen = parseJsonc(vorhanden.charCodeAt(0) === 0xfeff ? vorhanden.slice(1) : vorhanden) as unknown;
+      if (!istObjekt(gelesen)) return undefined;
+      daten = gelesen as typeof daten;
+    } catch {
+      return undefined;
+    }
   }
-  if (!istObjekt(daten)) daten = {};
   if (!istObjekt(daten.mcpServers)) daten.mcpServers = {};
   daten.mcpServers[SERVER_NAME] = cachlyMcpEintrag(apiUrl, instanceId);
   return JSON.stringify(daten, null, 2);

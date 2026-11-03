@@ -8,7 +8,7 @@ describe('fuegeInMcpJsonEin', () => {
   it('schreibt nur Adresse und Kennung, nie einen Schluessel', () => {
     const e = cachlyMcpEintrag('https://api.cachly.dev', INST);
     expect(e.env).toEqual({ CACHLY_API_URL: 'https://api.cachly.dev', CACHLY_BRAIN_INSTANCE_ID: INST });
-    const text = fuegeInMcpJsonEin(undefined, 'https://api.cachly.dev', INST);
+    const text = fuegeInMcpJsonEin(undefined, 'https://api.cachly.dev', INST)!;
     expect(text).not.toContain('CACHLY_JWT');
     expect(JSON.parse(text).mcpServers.cachly.env).toEqual(e.env);
   });
@@ -20,15 +20,26 @@ describe('fuegeInMcpJsonEin', () => {
         cachly: { command: 'npx', args: ['-y', 'x'], env: { CACHLY_JWT: KEY, CACHLY_BRAIN_INSTANCE_ID: 'old' } },
       },
     });
-    const text = fuegeInMcpJsonEin(vorher, 'https://api.cachly.dev', INST);
+    const text = fuegeInMcpJsonEin(vorher, 'https://api.cachly.dev', INST)!;
     expect(text).not.toContain(KEY);
     const j = JSON.parse(text);
     expect(j.mcpServers.other).toEqual({ command: 'x', env: { TOKEN: 'keep' } });
     expect(j.mcpServers.cachly.env.CACHLY_BRAIN_INSTANCE_ID).toBe(INST);
   });
 
-  it('beginnt neu, wenn die Datei kein JSON ist (wie bisher)', () => {
-    expect(JSON.parse(fuegeInMcpJsonEin('{ kaputt', 'https://a', INST)).mcpServers.cachly.env.CACHLY_BRAIN_INSTANCE_ID).toBe(INST);
+  it('vscode-2: eine kaputte Datei wird nicht ersetzt (undefined), damit eigene Server nicht verloren gehen', () => {
+    expect(fuegeInMcpJsonEin('{ "mcpServers": { "mine": { "command": "x" }, } oops', 'https://a', INST)).toBeUndefined();
+    expect(fuegeInMcpJsonEin('{ kaputt', 'https://a', INST)).toBeUndefined();
+    expect(fuegeInMcpJsonEin('[1,2]', 'https://a', INST)).toBeUndefined();
+  });
+
+  it('eine leere Datei zaehlt als neue Datei', () => {
+    expect(JSON.parse(fuegeInMcpJsonEin('  \n', 'https://a', INST)!).mcpServers.cachly.env.CACHLY_BRAIN_INSTANCE_ID).toBe(INST);
+  });
+
+  it('liest eine Datei mit Kommentaren und Byte-Order-Marke', () => {
+    const t = fuegeInMcpJsonEin('\ufeff{ // meins\n "mcpServers": { "mine": { "command": "x" } } }', 'https://a', INST)!;
+    expect(JSON.parse(t).mcpServers.mine).toEqual({ command: 'x' });
   });
 });
 
@@ -78,7 +89,7 @@ describe('entferneSchluesselAusMcpJson', () => {
   it('meldet "sauber", wenn kein Schluessel drinsteht, auch bei Platzhaltern', () => {
     expect(entferneSchluesselAusMcpJson(undefined, unsere).zustand).toBe('sauber');
     expect(entferneSchluesselAusMcpJson('', unsere).zustand).toBe('sauber');
-    expect(entferneSchluesselAusMcpJson(fuegeInMcpJsonEin(undefined, 'https://a', INST), unsere).zustand).toBe('sauber');
+    expect(entferneSchluesselAusMcpJson(fuegeInMcpJsonEin(undefined, 'https://a', INST)!, unsere).zustand).toBe('sauber');
     const platzhalter = JSON.stringify({ mcpServers: { cachly: { env: { CACHLY_JWT: '${CACHLY_JWT}' } } } });
     expect(entferneSchluesselAusMcpJson(platzhalter, () => true).zustand).toBe('sauber');
   });

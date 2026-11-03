@@ -1,4 +1,6 @@
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { resolve } from 'node:path';
 import {
   DEFAULT_API_URL,
   normalizeBaseUrl,
@@ -10,6 +12,7 @@ import {
   parseJsonc,
   buildClsPostCommitHook,
   CLS_HOOK_VERSION,
+  CLS_NODE_PROGRAM,
 } from './config';
 
 describe('normalizeBaseUrl', () => {
@@ -182,6 +185,20 @@ describe('parseJsonc', () => {
 
 
 describe('buildClsPostCommitHook', () => {
+  it('v4: dasselbe Hook-Programm wie sdk/mcp/src/cls-hook.ts (03.11.2026)', () => {
+    // Zwei Abschriften desselben Hooks: v3 rief in beiden npx direkt auf, unter
+    // Windows kam deshalb kein Commit an. Driften sie auseinander, schreiben sich
+    // MCP-Setup und Erweiterung den Hook gegenseitig zurueck.
+    const quelle = readFileSync(resolve(__dirname, '..', '..', '..', 'mcp', 'src', 'cls-hook.ts'), 'utf8');
+    const ab = quelle.indexOf('export const CLS_NODE_PROGRAM =');
+    const block = quelle.slice(ab, quelle.indexOf(';\n', quelle.indexOf('"}catch(e){}"', ab)) + 1);
+    const teile = [...block.matchAll(/"((?:[^"\\]|\\.)*)"/g)].map((m) => m[1]);
+    expect(teile.join('')).toBe(CLS_NODE_PROGRAM);
+    expect(quelle).toContain(`export const CLS_HOOK_VERSION = '${CLS_HOOK_VERSION}'`);
+    expect(CLS_NODE_PROGRAM).toContain('npx-cli.js');
+    expect(CLS_NODE_PROGRAM).not.toContain("execFileSync('npx',['@cachly");
+  });
+
   it('embeds instance id, version marker, and shebang', () => {
     const hook = buildClsPostCommitHook('inst-9');
     expect(hook.startsWith('#!/bin/sh')).toBe(true);
@@ -191,7 +208,7 @@ describe('buildClsPostCommitHook', () => {
   });
 
   it('embeds no API key (v3): a key in .git/hooks/post-commit is a key in the project folder', () => {
-    expect(CLS_HOOK_VERSION).toBe('v3');
+    expect(CLS_HOOK_VERSION).toBe('v4');
     expect(buildClsPostCommitHook('i')).not.toContain('CACHLY_JWT');
     // A caller still passing the old second argument must not get a key written.
     expect((buildClsPostCommitHook as (i: string, k?: string) => string)('i', 'cky_live_x')).not.toContain('cky_live_x');
