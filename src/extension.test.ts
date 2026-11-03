@@ -308,6 +308,10 @@ describe('Schreibwege der Erweiterung (writeWorkspaceFiles)', () => {
     const git = fs.readFileSync(path.join(root, '.git', 'hooks', 'post-commit'), 'utf8');
     expect(git).toContain('Continuous Learning Stream v4');
     expect(git).not.toContain('CACHLY_JWT');
+    // settings.json projektbezogen (04.11.2026): kein Pfad dieses Rechners, die Datei wird oft eingecheckt.
+    const settings = fs.readFileSync(path.join(root, '.claude', 'settings.json'), 'utf8');
+    expect(settings).toContain('node \\"${CLAUDE_PROJECT_DIR}/.claude/hooks/cachly-ambient-prompt-submit.mjs\\"');
+    expect(settings).not.toContain(root.replace(/\\/g, '\\\\'));
     ext.deactivate();
   });
 

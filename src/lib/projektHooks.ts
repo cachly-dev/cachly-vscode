@@ -105,10 +105,17 @@ export async function installiereAmbientHooks(
     }
 
     const events: AmbientHookEvent[] = ['SessionStart', 'UserPromptSubmit', 'PreToolUse', 'Stop'];
+    // In settings.json steht der Pfad projektbezogen, nicht absolut (04.11.2026):
+    // die Datei wird oft eingecheckt, und ein absoluter Pfad brach bei jedem
+    // Kollegen und nach jedem Verschieben. Gemessen mit Claude Code 2.1.314
+    // unter Windows: `node "${CLAUDE_PROJECT_DIR}/…"` laeuft wie der absolute
+    // Pfad; aus einem Unterordner gestartet laedt Claude Code die Projekt-
+    // settings.json gar nicht — der absolute Pfad hatte dort keinen Vorteil.
+    // Dieselbe Form wie sdk/mcp/src/ambient-hooks.ts (installAmbientHooks).
     const paths = {} as AmbientHookPaths;
     for (const event of events) {
       const p = path.join(hookDir, AMBIENT_SCRIPT_NAMES[event]);
-      paths[event] = p;
+      paths[event] = `\${CLAUDE_PROJECT_DIR}/.claude/hooks/${AMBIENT_SCRIPT_NAMES[event]}`;
       const script = buildAmbientHook(event, instanceId) + '\n';
       let prev = '';
       try { prev = await fs.promises.readFile(p, 'utf8'); } catch { /* neu */ }

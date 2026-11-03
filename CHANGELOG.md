@@ -2,6 +2,11 @@
 
 ---
 
+## [0.12.16] – 2026-11-04 — *"Hook settings that work for your whole team"*
+
+- **`.claude/settings.json` no longer contains a path of your machine.** The extension wrote the Claude Code hook commands with the absolute path of the project. That file is often committed, so the hooks broke for every teammate and after moving the folder. It now writes `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/…"`, the same as the MCP setup 0.10.228. Older cachly entries are replaced; your own hooks stay.
+- Includes everything from 0.12.15, which did not reach the Marketplace.
+
 ## [0.12.15] – 2026-11-03 — *"No token guess, no lost settings"*
 
 Found by testers who walked the VS Code path for real, each finding checked by a second reviewer.
