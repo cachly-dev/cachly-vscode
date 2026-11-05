@@ -75,6 +75,20 @@ describe('installiereAmbientHooks (v5)', () => {
 });
 
 describe('installiereClsHook (v3)', () => {
+  it('schreibt keinen Hook, wenn die Instanz-ID Shell-Zeichen enthaelt, und laesst einen fremden Hook unberuehrt', async () => {
+    // 05.11.2026: cachly.instanceId aus .vscode/settings.json eines fremden Repos landete
+    // ungeprueft im Shell-Skript, das bei jedem Commit laeuft.
+    const boese = 'x"; touch GEHACKT; echo "';
+    const meldungen: string[] = [];
+    await installiereClsHook(root, boese, (...t: unknown[]) => { meldungen.push(t.map(String).join(' ')); });
+    expect(fs.existsSync(path.join(root, '.git', 'hooks', 'post-commit'))).toBe(false);
+    expect(meldungen.join('\n')).toMatch(/skipped/);
+
+    fs.writeFileSync(path.join(root, '.git', 'hooks', 'post-commit'), FREMDER_GIT_HOOK);
+    await installiereClsHook(root, boese, () => {});
+    expect(lies('.git', 'hooks', 'post-commit')).toBe(FREMDER_GIT_HOOK);
+  });
+
   it('legt den Hook ohne Schluessel an', async () => {
     await installiereClsHook(root, INSTANZ);
     const h = lies('.git', 'hooks', 'post-commit');

@@ -2,6 +2,11 @@
 
 ---
 
+## [0.12.17] – 2026-11-05 — *"A project setting can no longer reach your git hook"*
+
+- **Security: the git hook only accepts a plain instance id.** The extension writes the Brain instance id into `.git/hooks/post-commit`, a shell script that runs on every commit, also outside VS Code. The id can come from `cachly.instanceId` in a project's `.vscode/settings.json`. A cloned repository could put shell commands there, and after you trusted the folder they would have run on every commit. Now the id may only contain letters, digits, `_` and `-`, the same rule as the MCP setup and the JetBrains plugin. Otherwise no hook is written and the log says why.
+- Includes everything from 0.12.15 and 0.12.16, which did not reach the Marketplace.
+
 ## [0.12.16] – 2026-11-04 — *"Hook settings that work for your whole team"*
 
 - **`.claude/settings.json` no longer contains a path of your machine.** The extension wrote the Claude Code hook commands with the absolute path of the project. That file is often committed, so the hooks broke for every teammate and after moving the folder. It now writes `node "${CLAUDE_PROJECT_DIR}/.claude/hooks/…"`, the same as the MCP setup 0.10.228. Older cachly entries are replaced; your own hooks stay.

@@ -139,7 +139,21 @@ export const CLS_NODE_PROGRAM =
   "else if(process.platform!=='win32'){cp.execFileSync('npx',a,o)}" +
   "}catch(e){}";
 
+/**
+ * Die Instanz-ID steht im Git-Hook in doppelten Anfuehrungszeichen eines
+ * Shell-Skripts, das bei jedem Commit laeuft — auch ausserhalb von VS Code.
+ * Sie kann aus `cachly.instanceId` in `.vscode/settings.json` eines geklonten
+ * Repos kommen (Arbeitsbereichs-Einstellung, extension.ts writeWorkspaceFiles).
+ * Ein Wert wie `x"; curl …|sh; "` liefe dann bei jedem Commit. Bis 0.12.16
+ * stand sie hier ungeprueft (05.11.2026). Dieselbe Regel wie
+ * instanzIdFuerSkript in sdk/mcp/src/git-ohne-shell.ts; JetBrains filtert ebenso.
+ */
+export const INSTANZ_ID_MUSTER = /^[A-Za-z0-9_-]{1,64}$/;
+
 export function buildClsPostCommitHook(instanceId: string): string {
+  if (!INSTANZ_ID_MUSTER.test(instanceId)) {
+    throw new Error('instance id has characters that do not belong in a git hook (allowed: letters, digits, _ and -); hook not written');
+  }
   const nodeProgram = CLS_NODE_PROGRAM;
   return [
     `#!/bin/sh`,
