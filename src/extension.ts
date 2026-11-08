@@ -3389,7 +3389,7 @@ export function buildHealthHtml(health: BrainHealth): string {
         ? `lessons are attributed to <code>${esc(configuredAuthor)}</code>`
         : 'lessons are currently unattributed'}. Cross-author metrics appear once a teammate uses this instance.</p>
       ${!configuredAuthor ? `<p><button class="mini" data-cmd="setAuthor">Set your author name</button></p>` : ''}
-      <p class="hint">Invite a teammate: same instance ID + API key in their editor — their AI instantly knows everything this Brain knows.</p>`;
+      <p class="hint">Invite a teammate: run <code>npx @cachly-dev/mcp-server@latest invite &lt;email&gt;</code> — once they accept, their AI knows everything this Brain knows.</p>`;
   }
 
   const crystalSection = health.crystal
