@@ -18,6 +18,7 @@ import {
   erfolgsText, fehlerText, type Post, type Get,
 } from './lib/uebernahme';
 import { HOOK_BUENDEL } from './lib/ambient';
+import { anonKopf } from './lib/anonKopf';
 import { fuegeInMcpJsonEin } from './lib/mcpJson';
 import { erkenneGitHost, ersetzeStringWert, fuegeStringWertEin } from './lib/gitHost';
 import { installiereAmbientHooks, installiereClsHook } from './lib/projektHooks';
@@ -3146,24 +3147,19 @@ function trackVSCodeEvent(
     editor: programmName(vscode.env.appName),
     editor_version: editorFassung(vscode.version),
     source: 'vscode',
-    api_key: effectiveKey,
     instance_id: instanceId,
-  }).catch(() => { /* silently ignore — telemetry must never break UX */ });
+  }, effectiveKey).catch(() => { /* silently ignore — telemetry must never break UX */ });
 }
 
 /** POST without authentication — used for device flow (no API key yet). */
-function apiPostAnon(url: string, body: Record<string, unknown>): Promise<unknown> {
+function apiPostAnon(url: string, body: Record<string, unknown>, key = ''): Promise<unknown> {
   return new Promise((resolve, reject) => {
     const mod = new URL(url).protocol === 'https:' ? https : http;
     const payload = JSON.stringify(body);
     const req = mod.request(url, {
       method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Accept': 'application/json',
-        'Content-Length': Buffer.byteLength(payload),
-        'User-Agent': userAgent(),
-      },
+      // A key (telemetry only) goes in the Authorization header, never in the body.
+      headers: anonKopf(payload, userAgent(), key),
       timeout: 8000,
     }, (res) => {
       let data = '';

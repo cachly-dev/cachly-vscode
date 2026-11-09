@@ -2,6 +2,10 @@
 
 ---
 
+## [0.12.18] – 2026-11-09 — *"Your key travels in the header, not in the body"*
+
+- **The usage ping no longer puts your API key in the request body.** With "share usage statistics" on, the extension sends a usage event to `/api/v1/telemetry/mcp`, and the key lets the server count it for your account. Until now the body held that key in the field `api_key`. Now the key travels only in the `Authorization: Bearer` header, like every other call to the API. Without a key, no header is sent. The event itself is unchanged.
+
 ## [0.12.17] – 2026-11-05 — *"A project setting can no longer reach your git hook"*
 
 - **Security: the git hook only accepts a plain instance id.** The extension writes the Brain instance id into `.git/hooks/post-commit`, a shell script that runs on every commit, also outside VS Code. The id can come from `cachly.instanceId` in a project's `.vscode/settings.json`. A cloned repository could put shell commands there, and after you trusted the folder they would have run on every commit. Now the id may only contain letters, digits, `_` and `-`, the same rule as the MCP setup and the JetBrains plugin. Otherwise no hook is written and the log says why.
