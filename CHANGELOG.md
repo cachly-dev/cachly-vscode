@@ -2,6 +2,12 @@
 
 ---
 
+## [0.12.19] – 2026-11-12 — *"Private lessons stay out of your prompt"*
+
+- **The prompt hook no longer slips private or group-only lessons into your prompt.** The extension sets up the cachly hooks for Claude Code in `.claude/hooks/`. At the start of a session and on every prompt they add lessons that fit. Until now they picked from every lesson in the Brain, a colleague's private ones included. Now they show team-wide lessons only, the same rule as MCP server 0.10.250. The hook doesn't know who is asking, so group-only lessons stay out as well, also for members. A private lesson can still be read by its exact name with `recall_best_solution`.
+- **An update now reaches projects that are already set up.** Until 0.12.18 a new hook bundle only got into a project when you ran "cachly: Setup" again; updating the extension left the old file in place. Now the extension replaces `.claude/hooks/cachly-ambient-einblendung.mjs` on start when it differs from the one it ships, in trusted folders only. It does not create hooks in projects that have none.
+- The bundled hook is the one from MCP server 0.10.250.
+
 ## [0.12.18] – 2026-11-09 — *"Your key travels in the header, not in the body"*
 
 - **The usage ping no longer puts your API key in the request body.** With "share usage statistics" on, the extension sends a usage event to `/api/v1/telemetry/mcp`, and the key lets the server count it for your account. Until now the body held that key in the field `api_key`. Now the key travels only in the `Authorization: Bearer` header, like every other call to the API. Without a key, no header is sent. The event itself is unchanged.

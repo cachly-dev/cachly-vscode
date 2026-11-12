@@ -3,7 +3,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 import { fileURLToPath } from 'url';
-import { installiereAmbientHooks, installiereClsHook } from './projektHooks';
+import { frischeBuendelAuf, installiereAmbientHooks, installiereClsHook } from './projektHooks';
 import { AMBIENT_HOOK_VERSION, AMBIENT_SCRIPT_NAMES, HOOK_BUENDEL } from './ambient';
 import { CLS_HOOK_VERSION } from './config';
 import { alleDateien, alterGitHook, dateienMit, FREMDER_GIT_HOOK, INSTANZ, SCHLUESSEL } from './__fixtures__/altprojekt';
@@ -125,5 +125,43 @@ describe('installiereClsHook (v3)', () => {
     } finally {
       fs.rmSync(ohneGit, { recursive: true, force: true });
     }
+  });
+});
+
+// Ein Update der Erweiterung brachte das neue Buendel bis 0.12.18 nicht in
+// bestehende Projekte (12.11.2026: Filter fuer private Lektionen, MCP 0.10.250).
+describe('frischeBuendelAuf', () => {
+  const buendelImProjekt = () => path.join(root, '.claude', 'hooks', HOOK_BUENDEL);
+
+  it('ersetzt ein altes Buendel, laesst die Skripte stehen und keine Zwischendatei zurueck', async () => {
+    await installiereAmbientHooks(root, INSTANZ, BUENDEL);
+    fs.writeFileSync(buendelImProjekt(), '// altes Buendel\n');
+    const skript = lies('.claude', 'hooks', AMBIENT_SCRIPT_NAMES.UserPromptSubmit);
+
+    const geschrieben = await frischeBuendelAuf([root, root], BUENDEL);
+
+    expect(geschrieben).toEqual([buendelImProjekt()]);
+    expect(fs.readFileSync(buendelImProjekt()).equals(fs.readFileSync(BUENDEL))).toBe(true);
+    expect(lies('.claude', 'hooks', AMBIENT_SCRIPT_NAMES.UserPromptSubmit)).toBe(skript);
+    expect(fs.readdirSync(path.join(root, '.claude', 'hooks')).filter((f) => f.endsWith('.neu'))).toEqual([]);
+  });
+
+  it('legt nichts an, wo noch kein Buendel liegt', async () => {
+    expect(await frischeBuendelAuf([root], BUENDEL)).toEqual([]);
+    expect(fs.existsSync(path.join(root, '.claude'))).toBe(false);
+  });
+
+  it('schreibt nicht, wenn das Buendel schon aktuell ist', async () => {
+    await installiereAmbientHooks(root, INSTANZ, BUENDEL);
+    const vorher = fs.statSync(buendelImProjekt()).mtimeMs;
+    expect(await frischeBuendelAuf([root], BUENDEL)).toEqual([]);
+    expect(fs.statSync(buendelImProjekt()).mtimeMs).toBe(vorher);
+  });
+
+  it('laesst das Projekt unberuehrt, wenn das mitgelieferte Buendel fehlt', async () => {
+    await installiereAmbientHooks(root, INSTANZ, BUENDEL);
+    fs.writeFileSync(buendelImProjekt(), '// altes Buendel\n');
+    expect(await frischeBuendelAuf([root], path.join(root, 'gibt-es-nicht.mjs'))).toEqual([]);
+    expect(fs.readFileSync(buendelImProjekt(), 'utf8')).toBe('// altes Buendel\n');
   });
 });

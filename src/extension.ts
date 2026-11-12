@@ -21,7 +21,7 @@ import { HOOK_BUENDEL } from './lib/ambient';
 import { anonKopf } from './lib/anonKopf';
 import { fuegeInMcpJsonEin } from './lib/mcpJson';
 import { erkenneGitHost, ersetzeStringWert, fuegeStringWertEin } from './lib/gitHost';
-import { installiereAmbientHooks, installiereClsHook } from './lib/projektHooks';
+import { frischeBuendelAuf, installiereAmbientHooks, installiereClsHook } from './lib/projektHooks';
 import { legeSchluesselImHeimAb, schluesselFingerabdruck, type HeimAblage } from './lib/schluessel';
 import { bereinigeAltbestand, type AltbestandErgebnis } from './lib/altbestand';
 import { editorFassung, programmName } from './lib/programm';
@@ -645,7 +645,9 @@ function activateFull(context: vscode.ExtensionContext): void {
   // Altbestand: Schluessel, die eine aeltere Fassung ins Projekt geschrieben hat
   // (.mcp.json, .claude/hooks, .git/hooks), kommen heraus und liegen danach im
   // Heimordner. Meldung nur, wenn wirklich einer gefunden wurde.
-  setTimeout(() => void bereinigeProjektAltbestand('start'), 1500);
+  // Danach das Hook-Buendel in Projekten auffrischen, in denen schon eines liegt:
+  // ein Update brachte es bis 0.12.18 nur mit "cachly: Setup" dorthin.
+  setTimeout(() => void bereinigeProjektAltbestand('start').then(() => buendelImProjektAuffrischen()), 1500);
 
   // MCP setup-detection: if Brain is configured but no .mcp.json found in workspace,
   // auto-write it — runs after silentAutoSetup has had time to complete (6s delay)
@@ -2690,6 +2692,16 @@ async function projektOrdner(): Promise<string[]> {
 }
 
 let altbestandLaeuft = false;
+
+/** Neues Hook-Buendel in Projekte, in denen schon eines liegt (nur in vertrauten Ordnern). */
+async function buendelImProjektAuffrischen(): Promise<void> {
+  if (!vscode.workspace.isTrusted) return;
+  try {
+    await frischeBuendelAuf(await projektOrdner(), buendelPfad(), log);
+  } catch (e) {
+    log('Hook bundle refresh failed (non-critical)', (e as Error).message);
+  }
+}
 
 /**
  * Altbestand: Schluessel, die eine aeltere Fassung der Erweiterung in die

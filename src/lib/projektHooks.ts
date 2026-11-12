@@ -150,3 +150,49 @@ export async function installiereAmbientHooks(
     log('Ambient hooks install skipped (non-critical)', (e as Error).message);
   }
 }
+
+/**
+ * Das Buendel in Projekten auffrischen, in denen schon eines liegt.
+ *
+ * Bis 0.12.18 kam ein neues Buendel nur mit "cachly: Setup" ins Projekt: ein
+ * Update der Erweiterung allein liess die alte Datei liegen. Am 12.11.2026 hiess
+ * das: der Filter fuer private und Gruppen-Lektionen (MCP 0.10.250) waere bei
+ * keinem bestehenden Projekt angekommen.
+ *
+ * Ersetzt wird NUR das Buendel und NUR, wo es schon liegt. Neue Hooks legt
+ * weiter allein das Einrichten an. Geschrieben wird ueber eine Nachbardatei und
+ * Umbenennen: ein Hook, der gerade startet, darf keine halbe Datei laden.
+ *
+ * @returns die Pfade, die neu geschrieben wurden
+ */
+export async function frischeBuendelAuf(ordner: string[], buendelQuelle: string, log: Log = keinLog): Promise<string[]> {
+  let neu: string;
+  try {
+    neu = await fs.promises.readFile(buendelQuelle, 'utf8');
+  } catch (e) {
+    log(`Hook bundle refresh skipped: ${HOOK_BUENDEL} not readable`, (e as Error).message);
+    return [];
+  }
+  const geschrieben: string[] = [];
+  for (const o of new Set(ordner)) {
+    const ziel = path.join(o, '.claude', 'hooks', HOOK_BUENDEL);
+    let alt: string;
+    try {
+      alt = await fs.promises.readFile(ziel, 'utf8');
+    } catch {
+      continue; // kein Buendel im Projekt: nichts anlegen
+    }
+    if (alt === neu) continue;
+    const zwischen = `${ziel}.${process.pid}.neu`;
+    try {
+      await fs.promises.writeFile(zwischen, neu, 'utf8');
+      await fs.promises.rename(zwischen, ziel);
+      geschrieben.push(ziel);
+    } catch (e) {
+      await fs.promises.rm(zwischen, { force: true }).catch(() => undefined);
+      log('Hook bundle refresh failed (non-critical)', ziel, (e as Error).message);
+    }
+  }
+  if (geschrieben.length) log('Hook bundle refreshed', geschrieben);
+  return geschrieben;
+}
