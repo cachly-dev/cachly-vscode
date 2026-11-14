@@ -195,13 +195,14 @@ The canonical command-to-capability map for this extension is generated from
 
 The extension is **free forever**. It connects to your cachly Brain:
 
-| Tier | Storage | Price | Best for |
-|------|---------|-------|----------|
-| **Free** | 25 MB | **€0/mo forever** | Side projects & learning |
-| **Dev** | 200 MB | €19/mo | Individual developers |
-| **Pro** | 900 MB | €49/mo | Teams |
-| **Speed** | 900 MB + Dragonfly | €79/mo | AI-heavy workloads |
-| **Business** | 7 GB | €199/mo | Scale-ups |
+| Plan | Price | People | Storage |
+|------|-------|--------|---------|
+| **Free** | €0 | 1 | 25 MB |
+| **Solo** | €19/month | 1 | 200 MB |
+| **Team** | €49/month | up to 5 | 900 MB |
+| **Business** | €199/month | up to 20, with SSO | 7 GB |
+
+Yearly prices and current limits: [cachly.dev/pricing](https://cachly.dev/pricing).
 
 ✅ All plans: **German servers · GDPR-compliant · No credit card for Free**
 
