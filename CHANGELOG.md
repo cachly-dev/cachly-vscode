@@ -2,6 +2,10 @@
 
 ---
 
+## [0.12.20] – 2026-11-16 — *"Sign in once, and say so"*
+
+- **The Marketplace text now says what happens on first start.** Since 2026-11-06 a new Brain needs a sign-in; the anonymous test Brain is switched off on the server. The description, the README and the "Connect your Brain" walkthrough still promised "Free trial without an account" and "creates a test Brain by itself". They now say: on first start the extension opens the browser once to sign in with GitHub, Google or e-mail, and a new account gets 14 days of the Solo plan. The extension's behaviour is unchanged; it already fell back to this sign-in.
+
 ## [0.12.19] – 2026-11-12 — *"Private lessons stay out of your prompt"*
 
 - **The prompt hook no longer slips private or group-only lessons into your prompt.** The extension sets up the cachly hooks for Claude Code in `.claude/hooks/`. At the start of a session and on every prompt they add lessons that fit. Until now they picked from every lesson in the Brain, a colleague's private ones included. Now they show team-wide lessons only, the same rule as MCP server 0.10.250. The hook doesn't know who is asking, so group-only lessons stay out as well, also for members. A private lesson can still be read by its exact name with `recall_best_solution`.

@@ -4,7 +4,8 @@ Your Brain is a persistent memory that lives outside the editor — so your AI
 assistant remembers lessons, fixes and context across sessions, restarts and
 machines.
 
-When the extension starts, it creates a free test Brain for you (no credit card).
+When the extension starts, it asks you to sign in once in the browser (GitHub,
+Google or e-mail). A new account gets 14 days of the Solo plan, no credit card.
 You can also paste an existing `cky_live_…` key. When the **status bar** at the
 bottom shows "Brain: N lessons · X recalls", you're connected.
 

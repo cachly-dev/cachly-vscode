@@ -5,7 +5,7 @@
 >
 > **This extension puts that memory in front of you.** Lesson count live in the status bar, a Brain Health panel showing what it knows, Ambient Learning that stores patterns while you code, and Team Brain awareness so what one person learns reaches everyone.
 >
-> **Nothing to sign up for.** On first start the extension fetches a free trial brain by itself — no account, no credit card, no key to paste. Link an account later to keep the data. EU servers, GDPR.
+> **Sign in once, then it runs.** On first start the extension opens your browser once: sign in with GitHub, Google or e-mail. A new account gets 14 days of the Solo plan, then continues on Free. No credit card, no key to paste. EU servers, GDPR.
 
 <p align="center">
   <a href="https://marketplace.visualstudio.com/items?itemName=cachly-dev.cachly-brain">
@@ -118,8 +118,8 @@ CodeLens and the Brain Health panel show your team's lesson count and author att
 ### 💎 Memory Crystal — Instant context delivery
 When a compressed Crystal is loaded at session start, the status bar shows 💎. That's 800+ lessons delivered to your AI instantly. Full context before the first keystroke.
 
-### 🚀 Setup Detection & Instant Trial
-If the MCP server isn't connected, the extension detects it and guides you through instant setup — including a 14-day free trial of the Dev tier, no credit card. One-click start from inside VS Code.
+### 🚀 Setup Detection & Sign-in
+If the MCP server isn't connected, the extension detects it and guides you through setup: one sign-in in the browser, then 14 days of the Solo plan, no credit card. One-click start from inside VS Code.
 
 ---
 
@@ -173,7 +173,7 @@ The canonical command-to-capability map for this extension is generated from
 | `Cachly: Quick Recall` | Fuzzy-search your Brain from inside VS Code |
 | `Cachly: Save Lesson` | Capture any solution or insight directly from the editor |
 | `Cachly: Refresh Brain` | Manually trigger a Brain sync |
-| `Cachly: Setup Brain` | Run the interactive guided setup / instant trial flow |
+| `Cachly: Setup Brain` | Run the guided setup and sign-in |
 | `Cachly: Link Account` | Connect an existing cachly account to this VS Code instance |
 
 ---

@@ -1,8 +1,8 @@
 {
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
-  "description": "ChatGPT and Claude remember your conversations — cachly remembers your codebase. The bug you fixed, why you chose Postgres, the deploy step that always breaks. Free trial without an account.",
-  "version": "0.12.19",
+  "description": "ChatGPT and Claude remember your conversations — cachly remembers your codebase. The bug you fixed, why you chose Postgres, the deploy step that always breaks. Free plan; sign in once with GitHub, Google or e-mail.",
+  "version": "0.12.20",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
   "galleryBanner": {
@@ -221,7 +221,7 @@
           {
             "id": "cachly.connect",
             "title": "Connect your Brain",
-            "description": "The extension creates a test Brain by itself when it starts. You can also paste an existing API key. When the status bar shows \"Brain: N lessons · X recalls\", you are connected.\n[Connect Brain](command:cachly.setup)\n\nAlready have a key? [Open Settings](command:workbench.action.openSettings?%5B%22cachly%22%5D)",
+            "description": "On first start the extension asks you to sign in once in the browser (GitHub, Google or e-mail). You can also paste an existing API key. When the status bar shows \"Brain: N lessons · X recalls\", you are connected.\n[Connect Brain](command:cachly.setup)\n\nAlready have a key? [Open Settings](command:workbench.action.openSettings?%5B%22cachly%22%5D)",
             "media": {
               "markdown": "media/walkthrough/connect.md"
             },
