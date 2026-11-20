@@ -2,6 +2,11 @@
 
 ---
 
+## [0.12.21] – 2026-11-20 — *"The new mark, and a lesson at the end of the work"*
+
+- **The extension icon is the cachly mark now.** The orange square with the "c." replaces the old violet lightning bolt, the same mark as on cachly.dev, in the MCP Registry and in the JetBrains plugin.
+- **The Claude Code hooks the extension sets up ask for one lesson when real work ended without one.** After at least three file edits, a commit or a test run with no lesson saved, the stop hook sends Claude back once to save a single lesson with `learn_from_attempts`, or to say in one sentence that nothing reusable came out of it. At most every 20 minutes per session; `CACHLY_AUTO_LERNEN=aus` turns it off. Same hook bundle as MCP server 0.10.266.
+
 ## [0.12.20] – 2026-11-16 — *"Sign in once, and say so"*
 
 - **The Marketplace text now says what happens on first start.** Since 2026-11-06 a new Brain needs a sign-in; the anonymous test Brain is switched off on the server. The description, the README and the "Connect your Brain" walkthrough still promised "Free trial without an account" and "creates a test Brain by itself". They now say: on first start the extension opens the browser once to sign in with GitHub, Google or e-mail, and a new account gets 14 days of the Solo plan. The extension's behaviour is unchanged; it already fell back to this sign-in.
