@@ -43,7 +43,7 @@ const TRIAL_INSTANZ = '99999999-aaaa-bbbb-cccc-000000000001';
 
 // ── Attrappe ────────────────────────────────────────────────────────────────
 
-interface Anfrage { methode: string; url: string; authorization?: string }
+interface Anfrage { methode: string; url: string; authorization?: string; body?: string }
 let server: http.Server;
 let attrappeUrl = '';
 const anfragen: Anfrage[] = [];
@@ -53,9 +53,12 @@ let gesundesBrain = false;
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
-    anfragen.push({ methode: req.method ?? '', url: req.url ?? '', authorization: req.headers.authorization });
-    req.resume();
+    const eintrag: Anfrage = { methode: req.method ?? '', url: req.url ?? '', authorization: req.headers.authorization };
+    anfragen.push(eintrag);
+    const teile: Buffer[] = [];
+    req.on('data', (t: Buffer) => teile.push(t));
     req.on('end', () => {
+      eintrag.body = Buffer.concat(teile).toString('utf8');
       res.setHeader('Content-Type', 'application/json');
       if (req.method === 'POST' && req.url === '/auth/instant-trial') {
         res.end(JSON.stringify({
@@ -680,6 +683,66 @@ describe('vscode-8: CI-Host', () => {
     expect(fs.existsSync(path.join(root, '.github', 'workflows', 'cachly.yml'))).toBe(true);
     expect(fs.existsSync(path.join(root, '.gitlab-ci.yml'))).toBe(false);
     expect(fs.readFileSync(path.join(root, '.github', 'workflows', 'cachly.yml'), 'utf8')).toContain('cachly-action@v1');
+    ext.deactivate();
+  });
+});
+
+// ── 4. Kein Sofort-Test-Konto im leeren Fenster (0.12.22) ───────────────────
+
+describe('Auto-Onboarding braucht einen Ordner', () => {
+  const trialAufrufe = () => anfragen.filter((a) => a.methode === 'POST' && a.url === '/auth/instant-trial');
+  const meldungen = (name: string) => anfragen
+    .filter((a) => a.url === '/api/v1/telemetry/mcp' && a.body)
+    .map((a) => JSON.parse(a.body as string) as { event: string; reason?: string; instance_id?: string })
+    .filter((m) => m.event === name);
+
+  it('leeres Fenster: kein instant-trial-Aufruf, kein Konto, keine Datei', async () => {
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [];
+    ext.activate(kontext());
+    await vi.advanceTimersByTimeAsync(120_000);
+    await new Promise((r) => setImmediate(r));
+    expect(trialAufrufe()).toEqual([]);
+    expect(meldungen('vscode_trial_started')).toEqual([]);
+    expect(fake.zustand.config['cachly.apiKey']).toBeUndefined();
+    expect(fs.existsSync(homeDatei('.cachly', 'credentials.json'))).toBe(false);
+    ext.deactivate();
+  });
+
+  it('Ordner oeffnet spaeter: genau ein Konto, auch bei mehreren Ordnerwechseln', async () => {
+    const root = neuesProjekt();
+    const zweiter = neuesProjekt();
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [];
+    ext.activate(kontext());
+    await vi.advanceTimersByTimeAsync(10_000);
+    expect(trialAufrufe()).toHaveLength(0);
+
+    fake.ordnerOeffnen(root);
+    fake.ordnerOeffnen(zweiter);
+    await warteBis(() => fs.existsSync(path.join(root, '.mcp.json')), 'Projektdateien nach dem Oeffnen');
+    await vi.advanceTimersByTimeAsync(20_000);
+    expect(trialAufrufe()).toHaveLength(1);
+    expect(fake.zustand.config['cachly.apiKey']).toBe(TRIAL_KEY);
+    ext.deactivate();
+  });
+
+  it('Ordner offen: trial_started nach Kontoanlage, danach vscode_mcp_angebunden mit dem Ergebnis, ohne Personendaten', async () => {
+    const root = neuesProjekt();
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [root];
+    ext.activate(kontext());
+    await warteBis(() => fs.existsSync(path.join(root, '.mcp.json')), 'Projektdateien');
+    await warteBis(() => meldungen('vscode_mcp_angebunden').length > 0, 'Ereignis Anbindung');
+
+    expect(trialAufrufe()).toHaveLength(1);
+    expect(meldungen('vscode_trial_started')).toHaveLength(1);
+    const m = meldungen('vscode_mcp_angebunden');
+    expect(m).toHaveLength(1);
+    // VS Code 1.140 liest .mcp.json selbst; sonst waere es "vscode-mcp-json" oder "kein-copilot" — immer ein Stichwort.
+    expect(m[0].reason).toMatch(/^[a-z-]+$/);
+    expect(['mcp-json', 'vscode-mcp-json', 'kein-copilot', 'kaputt', 'kein-ordner', 'kein-schluessel', 'unbekannt']).toContain(m[0].reason);
+    expect(JSON.stringify(m[0])).not.toContain(root);
     ext.deactivate();
   });
 });

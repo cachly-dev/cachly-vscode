@@ -597,26 +597,21 @@ function activateFull(context: vscode.ExtensionContext): void {
     const bootKey = bootConfig.get<string>('apiKey', '');
     const bootInstance = bootConfig.get<string>('instanceId', '');
     if (!isValidApiKey(bootKey) || !bootInstance) {
-      // Small delay so VS Code finishes loading before hitting the network
-      setTimeout(() => {
-        void silentAutoSetup(context).then((provisioned) => {
-          if (!provisioned) {
-            // Both GitHub auth and instant-trial failed (fully offline / API down).
-            // Show the manual wizard as a last resort — but only once.
-            const onboardingShown = context.globalState.get<boolean>('onboardingShown', false);
-            if (!onboardingShown) {
-              void context.globalState.update('onboardingShown', true);
-              void vscode.window.showInformationMessage(
-                '🧠 Your AI forgets everything between sessions. Cachly gives it permanent memory — free, 60-second setup.',
-                'Set up now',
-                'Later',
-              ).then((action) => {
-                if (action === 'Set up now') void vscode.commands.executeCommand('cachly.setup');
-              });
-            }
-          }
+      // 0.12.22: Kein Sofort-Test-Konto in einem Fenster ohne Ordner. Automatische
+      // Installationen (Marktplatz-Scanner, Container) oeffnen nur ein leeres
+      // Fenster und legten so je ein Konto samt Brain an, ohne dass etwas
+      // angebunden werden konnte. Mit Ordner startet es wie bisher; ohne Ordner
+      // wartet es, bis der Mensch einen oeffnet.
+      if (hatVertrautenOrdner()) {
+        starteAutoSetup(context);
+      } else {
+        const hoerer = vscode.workspace.onDidChangeWorkspaceFolders(() => {
+          if (!hatVertrautenOrdner()) return;
+          hoerer.dispose();
+          starteAutoSetup(context);
         });
-      }, 2000);
+        context.subscriptions.push(hoerer);
+      }
     }
   }
 
@@ -652,6 +647,43 @@ function activateFull(context: vscode.ExtensionContext): void {
   // MCP setup-detection: if Brain is configured but no .mcp.json found in workspace,
   // auto-write it — runs after silentAutoSetup has had time to complete (6s delay)
   setTimeout(() => checkMcpSetupAndNudge(context), 6000);
+}
+
+// ── Auto-Onboarding: nur mit Ordner, nur einmal ──────────────────────────────
+
+/** Mindestens ein Arbeitsordner ist offen und das Fenster ist vertraut. */
+function hatVertrautenOrdner(): boolean {
+  return vscode.workspace.isTrusted && (vscode.workspace.workspaceFolders?.length ?? 0) > 0;
+}
+
+let autoSetupAngestossen = false;
+
+/** Startet silentAutoSetup hoechstens einmal je Aktivierung (kein zweites Konto, wenn zwei Wege gleichzeitig ausloesen). */
+function starteAutoSetup(context: vscode.ExtensionContext): void {
+  if (autoSetupAngestossen) return;
+  autoSetupAngestossen = true;
+  // Small delay so VS Code finishes loading before hitting the network
+  setTimeout(() => {
+    // Ordner in den 2 s wieder zu? Dann von vorn warten statt ein Konto ohne Ordner anzulegen.
+    if (!hatVertrautenOrdner()) { autoSetupAngestossen = false; return; }
+    void silentAutoSetup(context).then((provisioned) => {
+      if (!provisioned) {
+        // Both GitHub auth and instant-trial failed (fully offline / API down).
+        // Show the manual wizard as a last resort — but only once.
+        const onboardingShown = context.globalState.get<boolean>('onboardingShown', false);
+        if (!onboardingShown) {
+          void context.globalState.update('onboardingShown', true);
+          void vscode.window.showInformationMessage(
+            '🧠 Your AI forgets everything between sessions. Cachly gives it permanent memory — free, 60-second setup.',
+            'Set up now',
+            'Later',
+          ).then((action) => {
+            if (action === 'Set up now') void vscode.commands.executeCommand('cachly.setup');
+          });
+        }
+      }
+    });
+  }, 2000);
 }
 
 // ── Refresh loop ──────────────────────────────────────────────────────────────
@@ -1798,6 +1830,9 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
 
   // ── 3. Write API key ─────────────────────────────────────────────────────
   await config.update('apiKey', apiKey, vscode.ConfigurationTarget.Global);
+  // 0.12.22: Das Ereignis heisst "Konto angelegt" und kommt genau dann, wenn die API
+  // eines angelegt hat, nicht erst nach dem Schreiben der Dateien.
+  if (isTrial) trackVSCodeEvent('vscode_trial_started', { apiKey, instanceId, once: true });
 
   // ── 4. Auto-provision Brain instance (if not returned by auth step) ──────
   if (!instanceId) {
@@ -1816,6 +1851,7 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
   let copilot: CopilotAnbindung | undefined;
   if (instanceId) {
     try { copilot = await writeWorkspaceFiles(BASE_URL, apiKey, instanceId); } catch { /* non-fatal */ }
+    meldeAnbindung(copilot, apiKey, instanceId);
   }
 
   // ── 6. Track + notify ─────────────────────────────────────────────────────
@@ -1837,7 +1873,6 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
       'Show Brain', 'Dismiss',
     ).then(a => { if (a === 'Show Brain') showBrainHealthPanel(); });
   } else if (isTrial) {
-    trackVSCodeEvent('vscode_trial_started', { apiKey, instanceId, once: true });
     void vscode.window.showInformationMessage(
       `🧠 14-day free Brain trial started! ${verbindungsSatz(copilot)}`,
       'Link Account', 'Later',
@@ -2352,6 +2387,7 @@ async function finishSetup(token: string, baseUrl: string) {
   // Write workspace configs (.mcp.json, .vscode/mcp.json, copilot-instructions.md, .vscode/settings.json)
   let copilot: CopilotAnbindung | undefined;
   try { copilot = await writeWorkspaceFiles(baseUrl, token, instanceId); } catch { /* non-fatal */ }
+  meldeAnbindung(copilot, token, instanceId);
 
   await config.update('instanceId', instanceId, vscode.ConfigurationTarget.Workspace);
 
@@ -3141,9 +3177,9 @@ const _trackedThisSession = new Set<string>();
 
 function trackVSCodeEvent(
   event: string,
-  opts?: { apiKey?: string; instanceId?: string; once?: boolean },
+  opts?: { apiKey?: string; instanceId?: string; once?: boolean; reason?: string },
 ): void {
-  const { apiKey = '', instanceId = '', once = false } = opts ?? {};
+  const { apiKey = '', instanceId = '', once = false, reason } = opts ?? {};
   if (once) {
     if (_trackedThisSession.has(event)) return;
     _trackedThisSession.add(event);
@@ -3160,7 +3196,18 @@ function trackVSCodeEvent(
     editor_version: editorFassung(vscode.version),
     source: 'vscode',
     instance_id: instanceId,
+    // Nur ein Stichwort wie "vscode-mcp-json", nie Pfade oder Namen (API: sauberGrund, 32 Zeichen).
+    ...(reason ? { reason } : {}),
   }, effectiveKey).catch(() => { /* silently ignore — telemetry must never break UX */ });
+}
+
+/**
+ * Meldet, WIE die Anbindung ausging (weg aus lib/copilotMcp.ts), z. B. "mcp-json",
+ * "kein-ordner" oder "kaputt". Nur dieses Stichwort, keine Pfade, keine Namen.
+ * Ohne Ergebnis (Schreiben ausgefallen) heisst es "unbekannt".
+ */
+function meldeAnbindung(copilot: CopilotAnbindung | undefined, apiKey: string, instanceId: string): void {
+  trackVSCodeEvent('vscode_mcp_angebunden', { apiKey, instanceId, once: true, reason: copilot?.weg ?? 'unbekannt' });
 }
 
 /** POST without authentication — used for device flow (no API key yet). */
@@ -3654,6 +3701,7 @@ async function checkMcpSetupAndNudge(context: vscode.ExtensionContext): Promise<
       // VOR dem Schreiben gesetzt — wer beim ersten Start keinen Ordner offen
       // hatte, bekam die KI-Dateien nie. Jetzt holt der naechste Start es nach.
       if (!nachholenErledigt(copilot)) return;
+      meldeAnbindung(copilot, apiKey, instanceId2);
       await context.globalState.update('mcpNudgeShown', true);
       void vscode.window.showInformationMessage(
         `🧠 cachly: MCP wired to your AI editor! ${verbindungsSatz(copilot)}`,

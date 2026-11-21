@@ -2,6 +2,11 @@
 
 ---
 
+## [0.12.22] – 2026-11-21 — *"No account in an empty window"*
+
+- **An empty VS Code window no longer creates a test account.** Until now the extension asked the server for a test Brain two seconds after start, even when no folder was open. Automatic installs (marketplace scanners, containers) open only an empty window, so each one left an account and a Brain that nothing was ever connected to. Now the extension waits until a trusted folder is open. If you open one later, it does the setup then, once.
+- **The extension reports how the connection to your AI editor ended.** After writing the MCP files it sends one event, `vscode_mcp_angebunden`, with a single keyword such as `mcp-json`, `vscode-mcp-json`, `kein-ordner` or `kaputt`. No paths, no names. `vscode_trial_started` is now sent when the server really created an account, not after the files were written.
+
 ## [0.12.21] – 2026-11-20 — *"The new mark, and a lesson at the end of the work"*
 
 - **The extension icon is the cachly mark now.** The orange square with the "c." replaces the old violet lightning bolt, the same mark as on cachly.dev, in the MCP Registry and in the JetBrains plugin.

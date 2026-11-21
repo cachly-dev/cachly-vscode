@@ -35,6 +35,7 @@ function frischerZustand() {
   befehle: new Map<string, (...a: unknown[]) => unknown>(),
   ausgefuehrt: [] as Array<{ id: string; args: unknown[] }>,
   vertrauenHoerer: new Set<() => void>(),
+  ordnerHoerer: new Set<() => void>(),
   geoeffnet: [] as string[],
   chatTeilnehmer: [] as string[],
   };
@@ -110,6 +111,10 @@ export const workspace = {
     return zustand.ordner.length
       ? zustand.ordner.map((p, index) => ({ uri: uri(p), name: path.basename(p), index }))
       : undefined;
+  },
+  onDidChangeWorkspaceFolders(l: () => void) {
+    zustand.ordnerHoerer.add(l);
+    return entsorgbar(() => zustand.ordnerHoerer.delete(l));
   },
   getWorkspaceFolder(u: { fsPath: string }) {
     const p = zustand.ordner.find((o) => u.fsPath === o || u.fsPath.startsWith(o + path.sep));
@@ -207,4 +212,10 @@ export const env = {
 export function vertrauenGewaehren(): void {
   zustand.isTrusted = true;
   for (const l of [...zustand.vertrauenHoerer]) l();
+}
+
+/** Wie VS Code, wenn der Mensch einen Ordner oeffnet. */
+export function ordnerOeffnen(p: string): void {
+  zustand.ordner = [...zustand.ordner, p];
+  for (const l of [...zustand.ordnerHoerer]) l();
 }
