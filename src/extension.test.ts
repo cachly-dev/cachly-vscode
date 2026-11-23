@@ -189,7 +189,9 @@ describe('Restricted Mode (Ordner nicht vertraut)', () => {
     expect(fake.zustand.meldungen).toHaveLength(1);
     expect(fake.zustand.meldungen[0].text).toMatch(/Restricted Mode/);
     expect(fake.zustand.meldungen[0].knoepfe).toEqual([VERTRAUEN_KNOPF]);
-  });
+    // 20 s statt 5 s: frischer Modul-Import plus zwei Minuten Scheinzeit. Auf dem
+    // geteilten CI-Rechner lag der Lauf am 23.11.2026 zweimal bei 5.057 ms.
+  }, 20_000);
 
   it('der Knopf oeffnet den Vertrauensdialog (workbench.trust.manage)', async () => {
     const { fake, ext } = await lade();
