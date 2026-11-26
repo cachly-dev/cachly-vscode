@@ -1,9 +1,9 @@
 # 🧠 cachly Brain — VS Code Extension
 
-> **ChatGPT and Claude remember your conversations. cachly remembers your codebase.**  
-> The bug you fixed. Why you chose Postgres. The deploy step that always breaks — and everything your teammates learned. It stays when someone leaves the team, and it comes along when you switch assistants.
+> **Explain it once. Every AI knows it.**  
+> The bug you fixed. Why you chose Postgres. The deploy step that always breaks — and everything your teammates learned. cachly keeps your project's rules, decisions and fixes, so they stay when someone leaves the team and every AI tool reads them. Claude and ChatGPT remember your preferences; cachly keeps what your project has learned.
 >
-> **This extension puts that memory in front of you.** Lesson count live in the status bar, a Brain Health panel showing what it knows, Ambient Learning that stores patterns while you code, and Team Brain awareness so what one person learns reaches everyone.
+> **This extension puts that knowledge in front of you.** Lesson count live in the status bar, a Brain Health panel showing what it knows, Ambient Learning that stores patterns while you code, and Team Brain awareness so what one person learns reaches everyone.
 >
 > **Sign in once, then it runs.** On first start the extension opens your browser once: sign in with GitHub, Google or e-mail. A new account gets 14 days of the Solo plan, then continues on Free. No credit card, no key to paste. EU servers, GDPR.
 

@@ -1,7 +1,7 @@
 {
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
-  "description": "ChatGPT and Claude remember your conversations — cachly remembers your codebase. The bug you fixed, why you chose Postgres, the deploy step that always breaks. Free plan; sign in once with GitHub, Google or e-mail.",
+  "description": "Explain it once. Every AI knows it. cachly keeps your project's rules, decisions and fixed bugs, for you and your team. Free plan; sign in once with GitHub, Google or e-mail.",
   "version": "0.12.22",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
@@ -26,13 +26,13 @@
     "mcp",
     "model-context-protocol",
     "ai-assistant",
-    "persistent-memory",
+    "project-knowledge",
     "ambient-learning",
     "brain",
     "cachly",
     "codelens",
     "team",
-    "memory"
+    "rules"
   ],
   "activationEvents": [
     "onStartupFinished"
