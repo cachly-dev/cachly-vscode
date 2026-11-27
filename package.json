@@ -2,7 +2,7 @@
   "name": "cachly-brain",
   "displayName": "Cachly Brain",
   "description": "Explain it once. Every AI knows it. cachly keeps your project's rules, decisions and fixed bugs, for you and your team. Free plan; sign in once with GitHub, Google or e-mail.",
-  "version": "0.12.22",
+  "version": "0.12.23",
   "publisher": "cachly-dev",
   "icon": "images/logo.png",
   "galleryBanner": {

@@ -2,6 +2,10 @@
 
 ---
 
+## [0.12.23] – 2026-11-27 — *"The light mark"*
+
+- **New mark: a light "c." with a green dot (no more orange).** The extension icon matches cachly.dev, the JetBrains plugin and the READMEs. Behaviour is unchanged.
+
 ## [0.12.22] – 2026-11-21 — *"No account in an empty window"*
 
 - **An empty VS Code window no longer creates a test account.** Until now the extension asked the server for a test Brain two seconds after start, even when no folder was open. Automatic installs (marketplace scanners, containers) open only an empty window, so each one left an account and a Brain that nothing was ever connected to. Now the extension waits until a trusted folder is open. If you open one later, it does the setup then, once.
