@@ -2,6 +2,10 @@
 
 ---
 
+## [0.12.24] – 2026-11-27 — *"The yellow c. is back"*
+
+- **The yellow "c." is back as the logo.** The extension icon matches cachly.dev again. Behaviour is unchanged.
+
 ## [0.12.23] – 2026-11-27 — *"The light mark"*
 
 - **New mark: a light "c." with a green dot (no more orange).** The extension icon matches cachly.dev, the JetBrains plugin and the READMEs. Behaviour is unchanged.
