@@ -50,6 +50,13 @@ const anfragen: Anfrage[] = [];
 let trialOhneInstanz = false;
 /** 03.11.2026: wenn gesetzt, antwortet die Attrappe auf Instanz- und Speicher-Abfragen (fuer den Statusleisten-Test). */
 let gesundesBrain = false;
+/** 28.11.2026: Antwort der Attrappe auf POST /api/v1/instances/auto; leer = legt NEUE_INSTANZ an. */
+let autoFehler: { status: number; body: unknown } | undefined;
+/** Nur die Tests zum geloeschten Brain schalten das Anlegen ein; sonst antwortet die Attrappe 404 wie bisher. */
+let autoLegtAn = false;
+/** Wenn gesetzt, lehnt die Attrappe jede Anfrage an /api/v1/instances/... mit diesem Status ab (401/403). */
+let alleAbgelehntMit: number | undefined;
+const NEUE_INSTANZ = '99999999-aaaa-bbbb-cccc-000000000002';
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
@@ -65,6 +72,14 @@ beforeAll(async () => {
           api_key: TRIAL_KEY, instance_id: trialOhneInstanz ? undefined : TRIAL_INSTANZ, trial: true,
           trial_ends_at: new Date(Date.now() + 14 * 864e5).toISOString(),
         }));
+      } else if (alleAbgelehntMit && (req.url ?? '').startsWith('/api/v1/instances')) {
+        res.statusCode = alleAbgelehntMit;
+        res.end('{"error":"abgelehnt"}');
+      } else if (req.method === 'POST' && req.url === '/api/v1/instances/auto' && (autoLegtAn || autoFehler)) {
+        if (autoFehler) { res.statusCode = autoFehler.status; res.end(JSON.stringify(autoFehler.body)); }
+        else res.end(JSON.stringify({ instance_id: NEUE_INSTANZ, created: true }));
+      } else if (req.method === 'POST' && req.url === `/api/v1/instances/${NEUE_INSTANZ}/learn`) {
+        res.end('{}');
       } else if (gesundesBrain && req.method === 'GET' && req.url === `/api/v1/instances/${INSTANZ}`) {
         res.end(JSON.stringify({ tier: 'free' }));
       } else if (gesundesBrain && req.method === 'GET' && req.url === `/api/v1/instances/${INSTANZ}/memory`) {
@@ -98,6 +113,9 @@ beforeEach(() => {
   anfragen.length = 0;
   trialOhneInstanz = false;
   gesundesBrain = false;
+  autoFehler = undefined;
+  autoLegtAn = false;
+  alleAbgelehntMit = undefined;
   heim = tmp('heim');
   (globalThis as { __CACHLY_TEST_HOME?: string }).__CACHLY_TEST_HOME = heim;
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
@@ -569,6 +587,121 @@ describe('vscode-4: abgelehnte Lektionen', () => {
     // Attrappe antwortet 404: jeder Durchlauf schickt nur EINE Lektion (ein Start-Durchlauf kann dazukommen)
     expect(anfragen.filter((a) => a.url.endsWith('/learn')).length).toBeLessThanOrEqual(2);
     expect((ctx.globalState.get('cachly.offlineLessonQueue') as unknown[]).length).toBe(3);
+    ext.deactivate();
+  });
+});
+
+describe('Brain geloescht (404), Schluessel gilt noch', () => {
+  const ERSATZ_INFO = /Your trial Brain was removed because it stayed empty and unused for 14 days\. cachly created a new, empty Brain for you\. Nothing was lost: the old one had no saved lessons\./;
+  const lektion = (n: number) => ({ topic: `t${n}`, outcome: 'success', what_worked: 'w', source: 'vscode-manual', savedAt: n });
+  type Zustandsspeicher = { get(k: string, d?: unknown): unknown; update(k: string, v: unknown): Promise<void> };
+
+  async function aufbau(schluessel: string) {
+    autoLegtAn = true;
+    const root = neuesProjekt();
+    const { fake, ext } = await lade();
+    fake.zustand.ordner = [root];
+    fake.zustand.config['cachly.apiKey'] = schluessel;
+    fake.zustand.config['cachly.instanceId'] = INSTANZ;
+    const ctx = kontext() as unknown as { globalState: Zustandsspeicher };
+    await ctx.globalState.update('cachly.offlineLessonQueue', [lektion(1), lektion(2)]);
+    return { root, fake, ext, ctx };
+  }
+  const autoAufrufe = () => anfragen.filter((a) => a.methode === 'POST' && a.url === '/api/v1/instances/auto');
+  const lernAufrufe = (id: string) => anfragen.filter((a) => a.methode === 'POST' && a.url === `/api/v1/instances/${id}/learn`);
+  const warteschlange = (ctx: { globalState: Zustandsspeicher }) => (ctx.globalState.get('cachly.offlineLessonQueue') as unknown[]).length;
+
+  it('Sofort-Test-Schluessel: ein Anlegen, neue Kennung gespeichert, Meldung, Warteschlange geht ins neue Brain', async () => {
+    const { root, fake, ext, ctx } = await aufbau(TRIAL_KEY);
+    ext.activate(ctx as never);
+    await warteBis(() => fake.zustand.meldungen.some((m) => ERSATZ_INFO.test(m.text)), 'Meldung ueber das neue Brain');
+    await warteBis(() => warteschlange(ctx) === 0, 'Warteschlange leer');
+
+    expect(autoAufrufe().length).toBe(1);
+    expect(autoAufrufe()[0].authorization).toBe(`Bearer ${TRIAL_KEY}`);
+    expect(fake.zustand.config['cachly.instanceId']).toBe(NEUE_INSTANZ);
+    expect(lernAufrufe(NEUE_INSTANZ).length).toBe(2);
+    expect(lernAufrufe(INSTANZ).length).toBeLessThanOrEqual(1); // hoechstens der eine Versuch, der das Fehlen bemerkt
+    expect(JSON.parse(fs.readFileSync(path.join(root, '.vscode', 'settings.json'), 'utf8'))['cachly.instanceId']).toBe(NEUE_INSTANZ);
+    expect(fake.zustand.meldungen.filter((m) => ERSATZ_INFO.test(m.text)).length).toBe(1);
+
+    // Spaetere 404 in derselben Sitzung legen nichts mehr an.
+    fake.zustand.config['cachly.instanceId'] = INSTANZ;
+    await ctx.globalState.update('cachly.offlineLessonQueue', [lektion(3)]);
+    await ext.flushOfflineQueue();
+    expect(autoAufrufe().length).toBe(1);
+    ext.deactivate();
+  });
+
+  it('Sofort-Test-Schluessel: credentials.json mit genau der alten Kennung bekommt die neue', async () => {
+    fs.mkdirSync(homeDatei('.cachly'), { recursive: true });
+    fs.writeFileSync(homeDatei('.cachly', 'credentials.json'), JSON.stringify({ apiKey: TRIAL_KEY, instanceId: INSTANZ }));
+    const { fake, ext, ctx } = await aufbau(TRIAL_KEY);
+    ext.activate(ctx as never);
+    await warteBis(() => fake.zustand.meldungen.some((m) => ERSATZ_INFO.test(m.text)), 'Meldung');
+    expect(credentials()).toEqual({ apiKey: TRIAL_KEY, instanceId: NEUE_INSTANZ });
+    ext.deactivate();
+  });
+
+  it('Sofort-Test-Schluessel: credentials.json mit fremder Kennung bleibt unberuehrt', async () => {
+    fs.mkdirSync(homeDatei('.cachly'), { recursive: true });
+    fs.writeFileSync(homeDatei('.cachly', 'credentials.json'), JSON.stringify({ apiKey: TRIAL_KEY, instanceId: 'fremde-instanz' }));
+    const { fake, ext, ctx } = await aufbau(TRIAL_KEY);
+    ext.activate(ctx as never);
+    await warteBis(() => fake.zustand.meldungen.some((m) => ERSATZ_INFO.test(m.text)), 'Meldung');
+    expect(credentials()).toEqual({ apiKey: TRIAL_KEY, instanceId: 'fremde-instanz' });
+    ext.deactivate();
+  });
+
+  it('registrierter Schluessel: nie anlegen, konkrete Meldung mit "Open dashboard" und "Connect Brain"', async () => {
+    const { fake, ext, ctx } = await aufbau(LIVE_KEY);
+    fake.zustand.antwort = (_t, knoepfe) => (knoepfe.includes('Open dashboard') ? 'Open dashboard' : undefined);
+    ext.activate(ctx as never);
+    await warteBis(() => fake.zustand.meldungen.some((m) => m.text.includes(`The Brain ${INSTANZ} no longer exists in your account.`)), 'Meldung');
+    await ext.flushOfflineQueue();
+
+    expect(autoAufrufe().length).toBe(0);
+    expect(fake.zustand.config['cachly.instanceId']).toBe(INSTANZ);
+    const m = fake.zustand.meldungen.filter((x) => x.text.includes('no longer exists in your account'));
+    expect(m.length).toBe(1); // einmal je Sitzung, nicht bei jedem Durchlauf
+    expect(m[0].knoepfe).toEqual(['Open dashboard', 'Connect Brain']);
+    await warteBis(() => fake.zustand.geoeffnet.includes('https://cachly.dev/instances'), 'Dashboard geoeffnet');
+    expect(warteschlange(ctx)).toBe(2);
+    expect(fake.zustand.meldungen.some((x) => ERSATZ_INFO.test(x.text))).toBe(false);
+    ext.deactivate();
+  });
+
+  it('Anlegen scheitert (403 sign_in_required): ein Versuch, ehrliche Meldung mit naechstem Schritt, Warteschlange bleibt', async () => {
+    autoFehler = { status: 403, body: { error: 'sign_in_required' } };
+    const { fake, ext, ctx } = await aufbau(TRIAL_KEY);
+    ext.activate(ctx as never);
+    await warteBis(() => fake.zustand.meldungen.some((m) => /needs a sign-in/.test(m.text)), 'Fehlermeldung');
+    await ext.flushOfflineQueue();
+    await ext.flushOfflineQueue();
+
+    expect(autoAufrufe().length).toBe(1);
+    const m = fake.zustand.meldungen.find((x) => /needs a sign-in/.test(x.text))!;
+    expect(m.text).toContain('Cachly: Connect Brain');
+    expect(m.text).toContain('Your lessons stay on this computer');
+    expect(m.knoepfe).toEqual(['Connect Brain', 'Open dashboard']);
+    expect(fake.zustand.config['cachly.instanceId']).toBe(INSTANZ);
+    expect(warteschlange(ctx)).toBe(2);
+    expect(fake.zustand.meldungen.some((x) => ERSATZ_INFO.test(x.text))).toBe(false);
+    ext.deactivate();
+  });
+
+  it('401 vom Server: altes Verhalten, nichts wird angelegt, keine "Brain weg"-Meldung', async () => {
+    alleAbgelehntMit = 401;
+    const { fake, ext, ctx } = await aufbau(TRIAL_KEY);
+    ext.activate(ctx as never);
+    await vi.advanceTimersByTimeAsync(0);
+    await ext.flushOfflineQueue();
+    await vi.advanceTimersByTimeAsync(100);
+
+    expect(autoAufrufe().length).toBe(0);
+    expect(fake.zustand.config['cachly.instanceId']).toBe(INSTANZ);
+    expect(fake.zustand.meldungen.some((x) => /no longer exists|trial Brain was removed/.test(x.text))).toBe(false);
+    expect(warteschlange(ctx)).toBe(2);
     ext.deactivate();
   });
 });

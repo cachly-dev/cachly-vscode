@@ -2,6 +2,14 @@
 
 ---
 
+## [0.12.25] – 2026-11-28 — *"A removed trial Brain does not leave you stuck"*
+
+- **If your saved Brain was deleted, the extension now says so and acts the same way as the MCP server and the JetBrains plugin.** Since 2026-11-28 the server deletes trial Brains that are 14 days old, were never used and are empty. Until now the extension then showed "Setup needed" and kept your lessons on your computer with the message "The server did not accept your key or Brain".
+  - **Trial key (`cky_trial_`):** once per VS Code window the extension asks the server for a new, empty Brain, saves its id where the old one was (setting, `.vscode/settings.json`, and `~/.cachly/credentials.json` only if it held exactly the old id) and sends the lessons that were waiting. One short message explains what happened. If the server refuses (sign-in needed, plan limit, no network), you get a message with the next step; there is no second try in that window and the lessons stay on your computer.
+  - **Registered key:** the extension never creates a Brain by itself. It says "The Brain <id> no longer exists in your account." with the buttons "Open dashboard" and "Connect Brain".
+  - 401 and 403 are unchanged: "The server did not accept your key or Brain".
+
+
 ## [0.12.24] – 2026-11-27 — *"The yellow c. is back"*
 
 - **The yellow "c." is back as the logo.** The extension icon matches cachly.dev again. Behaviour is unchanged.

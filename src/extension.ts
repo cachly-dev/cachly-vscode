@@ -26,6 +26,9 @@ import { legeSchluesselImHeimAb, schluesselFingerabdruck, type HeimAblage } from
 import { bereinigeAltbestand, type AltbestandErgebnis } from './lib/altbestand';
 import { editorFassung, programmName } from './lib/programm';
 import { kontoPfad, liesKontoDatei, werteKontoAus } from './lib/konto';
+import {
+  DASHBOARD_URL, ERSATZ_ANGELEGT_TEXT, brainWegText, ersatzFehlerText, ersetzeHeimInstanz, istSofortTestSchluessel,
+} from './lib/brainWeg';
 import { ergaenzeGitExclude, schreibeRegelwissen } from './lib/regelwissen';
 import {
   STARTWISSEN_FRIST_MS, STARTWISSEN_VERSUCHE, startwissenAufruf, startwissenFaellig, startwissenSchluessel,
@@ -150,6 +153,7 @@ export async function flushOfflineQueue(): Promise<number> {
   if (!isValidApiKey(apiKey) || !instanceId) return 0;
 
   let synced = 0;
+  let brainWeg = false;
   const failed: OfflineLesson[] = [];
   for (const lesson of queue) {
     try {
@@ -165,12 +169,16 @@ export async function flushOfflineQueue(): Promise<number> {
       if (istAbgelehnt(e)) {
         failed.push(...queue.slice(queue.indexOf(lesson) + 1));
         log('offline queue: key or Brain rejected by server, flush stopped', (e as HttpError).status);
+        brainWeg = (e as HttpError).status === 404;
         break;
       }
     }
   }
 
   await extensionContext.globalState.update(OFFLINE_QUEUE_KEY, failed);
+  // Erst NACH dem Speichern der Warteschlange: behandleBrainWeg schickt sie bei Erfolg selbst
+  // noch einmal ab, und ein spaeteres Schreiben von `failed` wuerde sie doppelt hinterlassen.
+  if (brainWeg) await behandleBrainWeg(baseUrl, apiKey, instanceId);
   return synced;
 }
 
@@ -969,6 +977,11 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
   } catch (e1) {
     const status = e1 instanceof HttpError ? e1.status : 0;
     if (status === 401 || status === 403) { result.status = 'setup_needed'; return result; }
+    if (status === 404) {
+      // Schluessel angenommen, Instanz weg: kein zweiter Versuch, sondern die gemeinsame Regel.
+      void behandleBrainWeg(baseUrl, apiKey, instanceId);
+      return result;
+    }
     try {
       await new Promise((r) => setTimeout(r, 1200));
       instData = await fetchInstOnce();
@@ -1353,6 +1366,7 @@ async function saveLessonCommand(prefillTopic?: string, prefillWhatWorked?: stri
     const source = prefillTopic ? 'vscode-ambient' : 'vscode-manual';
     const authorName = config.get<string>('authorName', '');
     let abgelehnt = false;
+    let brainWeg = false;
     if (apiKey && instanceId) {
       try {
         await apiPost(`${baseUrl}/api/v1/instances/${instanceId}/learn`, apiKey, {
@@ -1366,12 +1380,16 @@ async function saveLessonCommand(prefillTopic?: string, prefillWhatWorked?: stri
       } catch (e) {
         // API unreachable — fall through to offline queue
         abgelehnt = istAbgelehnt(e);
+        brainWeg = abgelehnt && (e as HttpError).status === 404;
       }
     }
     // Offline fallback (no Brain connected, or API temporarily down)
     enqueueOfflineLesson({ topic, outcome, what_worked: whatWorked, source, savedAt: Date.now() });
     const queue = extensionContext.globalState.get<OfflineLesson[]>(OFFLINE_QUEUE_KEY, []);
-    if (abgelehnt) {
+    if (brainWeg) {
+      // Das Brain ist geloescht, der Schluessel gilt noch. Die Lektion liegt schon in der Warteschlange.
+      await behandleBrainWeg(baseUrl, apiKey, instanceId, `Lesson kept on this computer (${queue.length} total). `);
+    } else if (abgelehnt) {
       // vscode-4: nicht "wird automatisch erneut versucht" sagen, wenn es nie klappen wird.
       void vscode.window.showWarningMessage(
         `🧠 Lesson kept on this computer (${queue.length} total). The server did not accept your key or Brain, so it cannot be saved there yet.`,
@@ -1837,9 +1855,7 @@ async function silentAutoSetup(context: vscode.ExtensionContext): Promise<boolea
   // ── 4. Auto-provision Brain instance (if not returned by auth step) ──────
   if (!instanceId) {
     try {
-      type AutoResp = { instance_id?: string; instance?: { id: string } };
-      const autoData = await apiPost(`${BASE_URL}/api/v1/instances/auto`, apiKey, {}) as AutoResp | null;
-      instanceId = autoData?.instance?.id ?? autoData?.instance_id ?? '';
+      instanceId = (await legeInstanzAn(BASE_URL, apiKey))?.id ?? '';
     } catch { /* non-fatal — instance will be provisioned on next call */ }
   }
 
@@ -2253,6 +2269,110 @@ async function showAuthErrorAndOfferReset(reason: string) {
   }
 }
 
+type AutoAntwort = {
+  instance_id?: string;
+  status?: string;
+  created?: boolean;
+  instance?: { id: string; status: string; name: string };
+};
+
+/**
+ * POST /api/v1/instances/auto: gibt das vorhandene Brain des Kontos zurueck oder legt ein
+ * leeres Free-Brain an. Der eine Weg fuer finishSetup, silentAutoSetup und den Ersatz nach
+ * einem geloeschten Sofort-Test-Brain. Wirft HttpError bei Fehlern.
+ */
+async function legeInstanzAn(baseUrl: string, token: string): Promise<{ id: string; laeuft: boolean } | undefined> {
+  const autoData = await apiPost(`${baseUrl}/api/v1/instances/auto`, token, {}) as AutoAntwort | null;
+  // Vorhandene Instanz: Kennung direkt nehmen. Neu angelegt: Kennung kommt aus der Anlage.
+  if (autoData?.instance?.id) return { id: autoData.instance.id, laeuft: autoData.instance.status === 'running' };
+  if (autoData?.instance_id) return { id: autoData.instance_id, laeuft: false };
+  return undefined;
+}
+
+// ── Gespeichertes Brain geloescht (404, Schluessel gilt) ─────────────────────
+// Siehe lib/brainWeg.ts. Hoechstens ein Anlegeversuch je Fenster-Sitzung; ein
+// registrierter Schluessel legt NIE selbst ein Brain an.
+let ersatzBrainVersucht = false;
+let ersatzBrainLaeuft = false;
+const brainWegGemeldet = new Set<string>();
+
+async function behandleBrainWeg(
+  baseUrl: string, apiKey: string, alteId: string, vorspann = '',
+): Promise<'ersetzt' | 'gemeldet'> {
+  const oeffneDashboard = () => { void vscode.env.openExternal(vscode.Uri.parse(DASHBOARD_URL)); };
+  if (!istSofortTestSchluessel(apiKey)) {
+    // Registrierter Schluessel: nie automatisch anlegen. Aus dem Hintergrund einmal je Brain und
+    // Sitzung melden; wer gerade selbst eine Lektion speichert, bekommt die Antwort jedes Mal.
+    if (!vorspann && brainWegGemeldet.has(alteId)) return 'gemeldet';
+    brainWegGemeldet.add(alteId);
+    void vscode.window.showWarningMessage(
+      `🧠 ${vorspann}${brainWegText(alteId)}`, 'Open dashboard', 'Connect Brain',
+    ).then((c) => {
+      if (c === 'Open dashboard') oeffneDashboard();
+      else if (c === 'Connect Brain') void setupAICommand();
+    });
+    return 'gemeldet';
+  }
+
+  if (ersatzBrainVersucht) {
+    // Der eine Versuch dieser Sitzung ist durch. Wer selbst speichert, erfaehrt, wo seine Lektion liegt.
+    if (vorspann && !ersatzBrainLaeuft) {
+      void vscode.window.showWarningMessage(
+        `🧠 ${vorspann}Your trial Brain no longer exists and no new one could be created yet. Connect a Brain to save it.`,
+        'Connect Brain',
+      ).then((c) => { if (c === 'Connect Brain') void setupAICommand(); });
+    }
+    return 'gemeldet';
+  }
+  ersatzBrainVersucht = true;
+  ersatzBrainLaeuft = true;
+  try {
+    const neu = await legeInstanzAn(baseUrl, apiKey);
+    if (!neu) throw new HttpError(0, null);
+    log('trial Brain was removed; new Brain created', alteId, '->', neu.id);
+    await ersetzeGespeicherteInstanz(baseUrl, apiKey, alteId, neu.id);
+    void vscode.window.showInformationMessage(ERSATZ_ANGELEGT_TEXT);
+  } catch (e) {
+    const status = e instanceof HttpError ? e.status : 0;
+    log('trial Brain was removed; new Brain could not be created', status);
+    void vscode.window.showWarningMessage(
+      ersatzFehlerText(status, e instanceof HttpError ? e.body : null), 'Connect Brain', 'Open dashboard',
+    ).then((c) => {
+      if (c === 'Connect Brain') void setupAICommand();
+      else if (c === 'Open dashboard') oeffneDashboard();
+    });
+    return 'gemeldet';
+  } finally {
+    ersatzBrainLaeuft = false;
+  }
+  // Die gesammelten Lektionen gehen jetzt ins neue Brain (Warteschlange wie immer).
+  void flushOfflineQueue();
+  return 'ersetzt';
+}
+
+/** Neue Instanz dort eintragen, wo die alte stand. credentials.json nur, wenn dort genau die alte stand. */
+async function ersetzeGespeicherteInstanz(baseUrl: string, apiKey: string, alteId: string, neueId: string): Promise<void> {
+  const config = vscode.workspace.getConfiguration('cachly');
+  const stufen = config.inspect<string>('instanceId');
+  let gesetzt = false;
+  const tausche = async (wert: string | undefined, ziel: vscode.ConfigurationTarget) => {
+    if (wert !== alteId) return;
+    await config.update('instanceId', neueId, ziel);
+    gesetzt = true;
+  };
+  await tausche(stufen?.globalValue, vscode.ConfigurationTarget.Global);
+  await tausche(stufen?.workspaceValue, vscode.ConfigurationTarget.Workspace);
+  await tausche(stufen?.workspaceFolderValue, vscode.ConfigurationTarget.WorkspaceFolder);
+  // Stand die alte Kennung in keiner Einstellung (nur in .vscode/settings.json), schreibt writeWorkspaceFiles sie um.
+  // Ohne Angaben der Stufen (Testumgebung) und ohne Treffer: global setzen.
+  if (!gesetzt && !stufen) await config.update('instanceId', neueId, vscode.ConfigurationTarget.Global);
+
+  await ersetzeHeimInstanz({ apiKey, alteId, neueId });
+  // Wie bei der Einrichtung: Projektdateien (.mcp.json, .vscode/settings.json, ...) und Startwissen.
+  try { await writeWorkspaceFiles(baseUrl, apiKey, neueId); } catch (e) { log('workspace files not rewritten', (e as Error).message); }
+  void updateStatusBar();
+}
+
 async function finishSetup(token: string, baseUrl: string) {
   const config = vscode.workspace.getConfiguration('cachly');
 
@@ -2275,23 +2395,13 @@ async function finishSetup(token: string, baseUrl: string) {
 
   // Auto-provision a free Brain instance (idempotent — returns existing or creates one).
   // The response gives us the instance_id immediately — no need to search the list.
-  type AutoResp = {
-    instance_id?: string;
-    status?: string;
-    created?: boolean;
-    instance?: { id: string; status: string; name: string };
-  };
   let instanceId = config.get<string>('instanceId', '');
   let alreadyRunning = false;
   try {
-    const autoData = await apiPost(`${baseUrl}/api/v1/instances/auto`, token, {}) as AutoResp | null;
-    if (autoData?.instance?.id) {
-      // Existing instance — use its id directly
-      instanceId = autoData.instance.id;
-      alreadyRunning = autoData.instance.status === 'running';
-    } else if (autoData?.instance_id) {
-      // Newly provisioned — id returned from creation
-      instanceId = autoData.instance_id;
+    const auto = await legeInstanzAn(baseUrl, token);
+    if (auto) {
+      instanceId = auto.id;
+      alreadyRunning = auto.laeuft;
     }
   } catch (e) {
     if (e instanceof HttpError && (e.status === 401 || e.status === 403)) {
