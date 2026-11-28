@@ -57,6 +57,8 @@ let autoLegtAn = false;
 /** Wenn gesetzt, lehnt die Attrappe jede Anfrage an /api/v1/instances/... mit diesem Status ab (401/403). */
 let alleAbgelehntMit: number | undefined;
 const NEUE_INSTANZ = '99999999-aaaa-bbbb-cccc-000000000002';
+/** 28.11.2026: Feld `grund` in der 404-Antwort auf GET /instances/<INSTANZ>; leer = die API nennt keinen Grund. */
+let wegGrund: string | undefined;
 
 beforeAll(async () => {
   server = http.createServer((req, res) => {
@@ -80,6 +82,9 @@ beforeAll(async () => {
         else res.end(JSON.stringify({ instance_id: NEUE_INSTANZ, created: true }));
       } else if (req.method === 'POST' && req.url === `/api/v1/instances/${NEUE_INSTANZ}/learn`) {
         res.end('{}');
+      } else if (wegGrund && req.method === 'GET' && req.url === `/api/v1/instances/${INSTANZ}`) {
+        res.statusCode = 404;
+        res.end(JSON.stringify({ error: 'not found', grund: wegGrund }));
       } else if (gesundesBrain && req.method === 'GET' && req.url === `/api/v1/instances/${INSTANZ}`) {
         res.end(JSON.stringify({ tier: 'free' }));
       } else if (gesundesBrain && req.method === 'GET' && req.url === `/api/v1/instances/${INSTANZ}/memory`) {
@@ -116,6 +121,7 @@ beforeEach(() => {
   autoFehler = undefined;
   autoLegtAn = false;
   alleAbgelehntMit = undefined;
+  wegGrund = undefined;
   heim = tmp('heim');
   (globalThis as { __CACHLY_TEST_HOME?: string }).__CACHLY_TEST_HOME = heim;
   vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout', 'setInterval', 'clearInterval'] });
@@ -596,8 +602,9 @@ describe('Brain geloescht (404), Schluessel gilt noch', () => {
   const lektion = (n: number) => ({ topic: `t${n}`, outcome: 'success', what_worked: 'w', source: 'vscode-manual', savedAt: n });
   type Zustandsspeicher = { get(k: string, d?: unknown): unknown; update(k: string, v: unknown): Promise<void> };
 
-  async function aufbau(schluessel: string) {
+  async function aufbau(schluessel: string, grund: string | undefined = 'leer_abgeraeumt') {
     autoLegtAn = true;
+    wegGrund = grund;
     const root = neuesProjekt();
     const { fake, ext } = await lade();
     fake.zustand.ordner = [root];
@@ -630,6 +637,52 @@ describe('Brain geloescht (404), Schluessel gilt noch', () => {
     await ctx.globalState.update('cachly.offlineLessonQueue', [lektion(3)]);
     await ext.flushOfflineQueue();
     expect(autoAufrufe().length).toBe(1);
+    ext.deactivate();
+  });
+
+  it('Sofort-Test-Schluessel, API nennt KEINEN Grund: neutrale Meldung ohne 14 Tage und ohne "nichts verloren"', async () => {
+    const { fake, ext, ctx } = await aufbau(TRIAL_KEY, null);
+    ext.activate(ctx as never);
+    const NEUTRAL = new RegExp(`Your trial Brain ${INSTANZ} no longer exists\\. cachly created a new, empty Brain for you\\.`);
+    await warteBis(() => fake.zustand.meldungen.some((m) => NEUTRAL.test(m.text)), 'neutrale Meldung');
+    expect(autoAufrufe().length).toBe(1);
+    expect(fake.zustand.meldungen.some((m) => /14 days|Nothing was lost/.test(m.text))).toBe(false);
+    expect(fake.zustand.config['cachly.instanceId']).toBe(NEUE_INSTANZ);
+    ext.deactivate();
+  });
+
+  it('mehrere Ordner: jeder Ordner mit der alten Kennung wird umgestellt, ein Ordner mit fremder Kennung nicht', async () => {
+    const FREMD = '12345678-0000-4000-8000-00000000abcd';
+    const a = neuesProjekt(); const b = neuesProjekt(); const c = neuesProjekt();
+    const schreibe = (root: string, id: string) => {
+      fs.mkdirSync(path.join(root, '.vscode'), { recursive: true });
+      fs.writeFileSync(path.join(root, '.vscode', 'settings.json'), `{\n  // meins\n  "cachly.instanceId": "${id}",\n  "editor.tabSize": 2\n}\n`);
+      fs.writeFileSync(path.join(root, '.mcp.json'), JSON.stringify({ mcpServers: { cachly: { env: { CACHLY_BRAIN_INSTANCE_ID: id } } } }, null, 2));
+    };
+    schreibe(a, INSTANZ); schreibe(b, INSTANZ); schreibe(c, FREMD);
+    const { fake, ext, ctx } = await aufbau(TRIAL_KEY);
+    fake.zustand.ordner = [a, b, c];
+    fake.zustand.ordnerConfig = { [a]: { 'cachly.instanceId': INSTANZ }, [b]: { 'cachly.instanceId': INSTANZ }, [c]: { 'cachly.instanceId': FREMD } };
+    ext.activate(ctx as never);
+    await warteBis(() => fake.zustand.meldungen.some((m) => ERSATZ_INFO.test(m.text)), 'Meldung');
+
+    for (const root of [a, b]) {
+      const settings = fs.readFileSync(path.join(root, '.vscode', 'settings.json'), 'utf8');
+      expect(settings).toContain(`"cachly.instanceId": "${NEUE_INSTANZ}"`);
+      expect(settings).toContain('// meins'); // Kommentar bleibt
+    }
+    for (const root of [a, b]) {
+      const mcp = fs.readFileSync(path.join(root, '.mcp.json'), 'utf8');
+      expect(mcp).toContain(NEUE_INSTANZ);
+      expect(mcp).not.toContain(INSTANZ);
+    }
+    expect(fake.zustand.ordnerConfig[a]!['cachly.instanceId']).toBe(NEUE_INSTANZ);
+    expect(fake.zustand.ordnerConfig[b]!['cachly.instanceId']).toBe(NEUE_INSTANZ);
+    // Der dritte Ordner gehoert zu einem anderen Brain: Einstellung und Dateien unberuehrt.
+    expect(fake.zustand.ordnerConfig[c]!['cachly.instanceId']).toBe(FREMD);
+    expect(fs.readFileSync(path.join(c, '.vscode', 'settings.json'), 'utf8')).toContain(`"cachly.instanceId": "${FREMD}"`);
+    expect(fs.readFileSync(path.join(c, '.mcp.json'), 'utf8')).toContain(FREMD);
+    expect(fs.readFileSync(path.join(c, '.mcp.json'), 'utf8')).not.toContain(NEUE_INSTANZ);
     ext.deactivate();
   });
 

@@ -27,7 +27,7 @@ import { bereinigeAltbestand, type AltbestandErgebnis } from './lib/altbestand';
 import { editorFassung, programmName } from './lib/programm';
 import { kontoPfad, liesKontoDatei, werteKontoAus } from './lib/konto';
 import {
-  DASHBOARD_URL, ERSATZ_ANGELEGT_TEXT, brainWegText, ersatzFehlerText, ersetzeHeimInstanz, istSofortTestSchluessel,
+  DASHBOARD_URL, ersatzAngelegtText, grundAusFehler, ersetzeKennungInOrdnern, brainWegText, ersatzFehlerText, ersetzeHeimInstanz, istSofortTestSchluessel,
 } from './lib/brainWeg';
 import { ergaenzeGitExclude, schreibeRegelwissen } from './lib/regelwissen';
 import {
@@ -154,6 +154,7 @@ export async function flushOfflineQueue(): Promise<number> {
 
   let synced = 0;
   let brainWeg = false;
+  let weggrund: string | undefined;
   const failed: OfflineLesson[] = [];
   for (const lesson of queue) {
     try {
@@ -170,6 +171,7 @@ export async function flushOfflineQueue(): Promise<number> {
         failed.push(...queue.slice(queue.indexOf(lesson) + 1));
         log('offline queue: key or Brain rejected by server, flush stopped', (e as HttpError).status);
         brainWeg = (e as HttpError).status === 404;
+        weggrund = grundAusFehler(e);
         break;
       }
     }
@@ -178,7 +180,7 @@ export async function flushOfflineQueue(): Promise<number> {
   await extensionContext.globalState.update(OFFLINE_QUEUE_KEY, failed);
   // Erst NACH dem Speichern der Warteschlange: behandleBrainWeg schickt sie bei Erfolg selbst
   // noch einmal ab, und ein spaeteres Schreiben von `failed` wuerde sie doppelt hinterlassen.
-  if (brainWeg) await behandleBrainWeg(baseUrl, apiKey, instanceId);
+  if (brainWeg) await behandleBrainWeg(baseUrl, apiKey, instanceId, '', weggrund);
   return synced;
 }
 
@@ -979,7 +981,7 @@ async function fetchBrainHealth(): Promise<BrainHealth> {
     if (status === 401 || status === 403) { result.status = 'setup_needed'; return result; }
     if (status === 404) {
       // Schluessel angenommen, Instanz weg: kein zweiter Versuch, sondern die gemeinsame Regel.
-      void behandleBrainWeg(baseUrl, apiKey, instanceId);
+      void behandleBrainWeg(baseUrl, apiKey, instanceId, '', grundAusFehler(e1));
       return result;
     }
     try {
@@ -1367,6 +1369,7 @@ async function saveLessonCommand(prefillTopic?: string, prefillWhatWorked?: stri
     const authorName = config.get<string>('authorName', '');
     let abgelehnt = false;
     let brainWeg = false;
+    let weggrund: string | undefined;
     if (apiKey && instanceId) {
       try {
         await apiPost(`${baseUrl}/api/v1/instances/${instanceId}/learn`, apiKey, {
@@ -1381,6 +1384,7 @@ async function saveLessonCommand(prefillTopic?: string, prefillWhatWorked?: stri
         // API unreachable — fall through to offline queue
         abgelehnt = istAbgelehnt(e);
         brainWeg = abgelehnt && (e as HttpError).status === 404;
+        weggrund = grundAusFehler(e);
       }
     }
     // Offline fallback (no Brain connected, or API temporarily down)
@@ -1388,7 +1392,7 @@ async function saveLessonCommand(prefillTopic?: string, prefillWhatWorked?: stri
     const queue = extensionContext.globalState.get<OfflineLesson[]>(OFFLINE_QUEUE_KEY, []);
     if (brainWeg) {
       // Das Brain ist geloescht, der Schluessel gilt noch. Die Lektion liegt schon in der Warteschlange.
-      await behandleBrainWeg(baseUrl, apiKey, instanceId, `Lesson kept on this computer (${queue.length} total). `);
+      await behandleBrainWeg(baseUrl, apiKey, instanceId, `Lesson kept on this computer (${queue.length} total). `, weggrund);
     } else if (abgelehnt) {
       // vscode-4: nicht "wird automatisch erneut versucht" sagen, wenn es nie klappen wird.
       void vscode.window.showWarningMessage(
@@ -2297,7 +2301,7 @@ let ersatzBrainLaeuft = false;
 const brainWegGemeldet = new Set<string>();
 
 async function behandleBrainWeg(
-  baseUrl: string, apiKey: string, alteId: string, vorspann = '',
+  baseUrl: string, apiKey: string, alteId: string, vorspann = '', grund?: string,
 ): Promise<'ersetzt' | 'gemeldet'> {
   const oeffneDashboard = () => { void vscode.env.openExternal(vscode.Uri.parse(DASHBOARD_URL)); };
   if (!istSofortTestSchluessel(apiKey)) {
@@ -2327,11 +2331,15 @@ async function behandleBrainWeg(
   ersatzBrainVersucht = true;
   ersatzBrainLaeuft = true;
   try {
+    // Der Grund steht nur in der 404-Antwort von GET /instances/:id; /learn nennt ihn nicht.
+    if (grund === undefined) {
+      try { await apiGet(`${baseUrl}/api/v1/instances/${alteId}`, apiKey); } catch (e) { grund = grundAusFehler(e); }
+    }
     const neu = await legeInstanzAn(baseUrl, apiKey);
     if (!neu) throw new HttpError(0, null);
     log('trial Brain was removed; new Brain created', alteId, '->', neu.id);
     await ersetzeGespeicherteInstanz(baseUrl, apiKey, alteId, neu.id);
-    void vscode.window.showInformationMessage(ERSATZ_ANGELEGT_TEXT);
+    void vscode.window.showInformationMessage(ersatzAngelegtText(alteId, grund));
   } catch (e) {
     const status = e instanceof HttpError ? e.status : 0;
     log('trial Brain was removed; new Brain could not be created', status);
@@ -2366,6 +2374,21 @@ async function ersetzeGespeicherteInstanz(baseUrl: string, apiKey: string, alteI
   // Stand die alte Kennung in keiner Einstellung (nur in .vscode/settings.json), schreibt writeWorkspaceFiles sie um.
   // Ohne Angaben der Stufen (Testumgebung) und ohne Treffer: global setzen.
   if (!gesetzt && !stufen) await config.update('instanceId', neueId, vscode.ConfigurationTarget.Global);
+
+  // Mehrere Ordner im Arbeitsbereich: JEDER Ordner, dessen Einstellung oder Projektdatei genau die alte
+  // Kennung traegt, wird umgestellt, nicht nur der aktive. Ordner mit anderer Kennung bleiben unberuehrt.
+  const ordner = vscode.workspace.workspaceFolders ?? [];
+  for (const o of ordner) {
+    const ordnerConfig = vscode.workspace.getConfiguration('cachly', o.uri);
+    if (ordnerConfig.inspect<string>('instanceId')?.workspaceFolderValue === alteId) {
+      try { await ordnerConfig.update('instanceId', neueId, vscode.ConfigurationTarget.WorkspaceFolder); } catch (e) {
+        log('folder setting not switched', o.uri.fsPath, (e as Error).message);
+      }
+    }
+  }
+  if (vscode.workspace.isTrusted) {
+    await ersetzeKennungInOrdnern(ordner.map((o) => o.uri.fsPath), alteId, neueId);
+  }
 
   await ersetzeHeimInstanz({ apiKey, alteId, neueId });
   // Wie bei der Einrichtung: Projektdateien (.mcp.json, .vscode/settings.json, ...) und Startwissen.

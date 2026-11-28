@@ -28,6 +28,8 @@ function frischerZustand() {
   ordner: [] as string[],
   aktiveDatei: undefined as string | undefined,
   config: {} as Record<string, unknown>,
+  /** Einstellungen je Ordner (Stufe workspaceFolder), Schluessel: Ordnerpfad, dann `abschnitt.name`. */
+  ordnerConfig: {} as Record<string, Record<string, unknown>>,
   meldungen: [] as Meldung[],
   /** Antwort auf eine Meldung mit Knoepfen: Funktion (Text, Knoepfe) -> Knopf oder undefined. */
   antwort: (_text: string, _knoepfe: string[]): string | undefined => undefined,
@@ -85,16 +87,27 @@ class FakeEventEmitter<T> {
 }
 export { FakeEventEmitter as EventEmitter };
 
-function konfiguration(abschnitt?: string) {
+function konfiguration(abschnitt?: string, bereich?: { fsPath: string }) {
   const voll = (k: string) => (abschnitt ? `${abschnitt}.${k}` : k);
+  const ordnerWerte = () => (bereich ? zustand.ordnerConfig[bereich.fsPath] : undefined);
   return {
     get<T>(k: string, standard?: T): T | undefined {
-      const v = zustand.config[voll(k)];
+      const v = ordnerWerte()?.[voll(k)] ?? zustand.config[voll(k)];
       return (v === undefined ? standard : v) as T | undefined;
     },
     has: (k: string) => zustand.config[voll(k)] !== undefined,
-    inspect: () => undefined,
-    async update(k: string, wert: unknown) {
+    // Nur fuer Ordner mit eigener Einstellung gibt es eine Auskunft; sonst wie bisher undefined.
+    inspect: (k: string) => {
+      const o = ordnerWerte();
+      return o && voll(k) in o ? { key: voll(k), workspaceFolderValue: o[voll(k)] } : undefined;
+    },
+    async update(k: string, wert: unknown, ziel?: number) {
+      const o = ordnerWerte();
+      if (bereich && ziel === ConfigurationTarget.WorkspaceFolder && o) {
+        if (wert === undefined) delete o[voll(k)];
+        else o[voll(k)] = wert;
+        return;
+      }
       if (wert === undefined) delete zustand.config[voll(k)];
       else zustand.config[voll(k)] = wert;
     },

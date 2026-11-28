@@ -9,6 +9,7 @@
 // Dieser Teil ist rein; Netz und Einstellungen liegen in extension.ts.
 
 import { homedir } from 'os';
+import * as path from 'path';
 import { nodeDateiZugriff, type DateiZugriff } from './copilotMcp';
 import { credentialsDateiPfad } from './schluessel';
 
@@ -19,9 +20,27 @@ export function istSofortTestSchluessel(apiKey: string): boolean {
   return apiKey.startsWith('cky_trial_');
 }
 
-export const ERSATZ_ANGELEGT_TEXT =
-  '🧠 Your trial Brain was removed because it stayed empty and unused for 14 days. '
-  + 'cachly created a new, empty Brain for you. Nothing was lost: the old one had no saved lessons.';
+/** Loeschgrund in der 404-Antwort der API (Feld `grund`), wenn der Abraeumer das Brain entfernt hat. */
+export const GRUND_LEER_ABGERAEUMT = 'leer_abgeraeumt';
+
+/** Das Feld `grund` aus einem HttpError (oder einer Antwort mit `body`); sonst undefined. */
+export function grundAusFehler(e: unknown): string | undefined {
+  const body = e && typeof e === 'object' ? (e as { body?: unknown }).body : undefined;
+  const grund = body && typeof body === 'object' ? (body as { grund?: unknown }).grund : undefined;
+  return typeof grund === 'string' ? grund : undefined;
+}
+
+/**
+ * Die Meldung nach dem Anlegen des Ersatz-Brains. "14 Tage leer, nichts verloren"
+ * steht NUR da, wenn die API den Grund `leer_abgeraeumt` genannt hat; sonst weiss
+ * der Client nicht, warum das Brain fehlt, und sagt nur, was stimmt.
+ */
+export function ersatzAngelegtText(alteId: string, grund?: string): string {
+  return grund === GRUND_LEER_ABGERAEUMT
+    ? '🧠 Your trial Brain was removed because it stayed empty and unused for 14 days. '
+      + 'cachly created a new, empty Brain for you. Nothing was lost: the old one had no saved lessons.'
+    : `🧠 Your trial Brain ${alteId} no longer exists. cachly created a new, empty Brain for you.`;
+}
 
 export function brainWegText(instanceId: string): string {
   return `The Brain ${instanceId} no longer exists in your account.`;
@@ -32,12 +51,12 @@ export function ersatzFehlerText(status: number, body: unknown): string {
   const fehler = body && typeof body === 'object' ? String((body as { error?: unknown }).error ?? '') : '';
   const schluss = ' Your lessons stay on this computer and are saved as soon as a Brain is connected.';
   if (status === 403 && /sign_in_required/.test(fehler)) {
-    return '🧠 Your trial Brain was removed, and a new one needs a sign-in. Run "Cachly: Connect Brain" to sign in.' + schluss;
+    return '🧠 Your trial Brain no longer exists, and a new one needs a sign-in. Run "Cachly: Connect Brain" to sign in.' + schluss;
   }
   if (status === 402 || status === 403 || status === 429) {
-    return '🧠 Your trial Brain was removed, and your plan does not allow a new one right now. Open the dashboard to check your plan, or run "Cachly: Connect Brain".' + schluss;
+    return '🧠 Your trial Brain no longer exists, and your plan does not allow a new one right now. Open the dashboard to check your plan, or run "Cachly: Connect Brain".' + schluss;
   }
-  return '🧠 Your trial Brain was removed, and cachly could not create a new one (no answer from the server). Check your connection, then run "Cachly: Connect Brain".' + schluss;
+  return '🧠 Your trial Brain no longer exists, and cachly could not create a new one (no answer from the server). Check your connection, then run "Cachly: Connect Brain".' + schluss;
 }
 
 /**
@@ -61,4 +80,60 @@ export async function ersetzeHeimInstanz(
   } catch {
     return 'unberuehrt';
   }
+}
+
+// ── Alle Ordner eines Arbeitsbereichs umstellen ─────────────────────────────
+
+/** Die Projektdateien, in denen die Kennung des Brains stehen kann (relativ zum Ordner). */
+export const KENNUNG_DATEIEN = ['.vscode/settings.json', '.mcp.json', '.vscode/mcp.json'];
+
+const KENNUNG_ZEICHEN = /[0-9A-Za-z-]/;
+
+/**
+ * Tauscht in einem Text GENAU die alte Kennung gegen die neue: nur ganze Vorkommen
+ * (an beiden Seiten kein weiteres Kennungszeichen), alles andere bleibt Zeichen
+ * fuer Zeichen. Gibt undefined zurueck, wenn die alte Kennung nicht vorkommt.
+ */
+export function ersetzeKennungImText(text: string, alteId: string, neueId: string): string | undefined {
+  if (!alteId || alteId === neueId) return undefined;
+  let aus = '';
+  let von = 0;
+  let treffer = false;
+  for (let i = text.indexOf(alteId); i !== -1; i = text.indexOf(alteId, von)) {
+    const davor = i > 0 ? text[i - 1]! : '';
+    const danach = text[i + alteId.length] ?? '';
+    if ((davor && KENNUNG_ZEICHEN.test(davor)) || (danach && KENNUNG_ZEICHEN.test(danach))) {
+      aus += text.slice(von, i + alteId.length);
+    } else {
+      aus += text.slice(von, i) + neueId;
+      treffer = true;
+    }
+    von = i + alteId.length;
+  }
+  return treffer ? aus + text.slice(von) : undefined;
+}
+
+/**
+ * Stellt in ALLEN Ordnern die Projektdateien von der alten auf die neue Kennung um,
+ * die genau die alte tragen. Ordner und Dateien mit einer anderen Kennung bleiben
+ * unberuehrt. Gibt die geaenderten Dateien zurueck. Wirft nie.
+ */
+export async function ersetzeKennungInOrdnern(
+  ordner: string[], alteId: string, neueId: string, dateien: DateiZugriff = nodeDateiZugriff,
+): Promise<string[]> {
+  const geaendert: string[] = [];
+  for (const o of ordner) {
+    for (const rel of KENNUNG_DATEIEN) {
+      const pfad = path.join(o, ...rel.split('/'));
+      try {
+        const text = await dateien.lesen(pfad);
+        if (text === undefined) continue;
+        const neu = ersetzeKennungImText(text, alteId, neueId);
+        if (neu === undefined) continue;
+        await dateien.schreiben(pfad, neu);
+        geaendert.push(pfad);
+      } catch { /* diese Datei bleibt, wie sie ist */ }
+    }
+  }
+  return geaendert;
 }

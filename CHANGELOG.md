@@ -2,6 +2,11 @@
 
 ---
 
+## [0.12.26] – 2026-11-28 — *"Only say what is true, and switch every folder"*
+
+- **The message about a removed trial Brain is now true.** "Stayed empty and unused for 14 days ... Nothing was lost" appears only when the server confirms that its cleanup job removed the Brain (field `grund: "leer_abgeraeumt"` in the 404 answer). Otherwise the extension says: "Your trial Brain <id> no longer exists. cachly created a new, empty Brain for you." The failure messages no longer claim a reason either.
+- **Workspaces with several folders:** after a new Brain was created, every folder whose setting, `.vscode/settings.json`, `.mcp.json` or `.vscode/mcp.json` held exactly the old id now points to the new one, not only the active folder. Folders with another id stay untouched.
+
 ## [0.12.25] – 2026-11-28 — *"A removed trial Brain does not leave you stuck"*
 
 - **If your saved Brain was deleted, the extension now says so and acts the same way as the MCP server and the JetBrains plugin.** Since 2026-11-28 the server deletes trial Brains that are 14 days old, were never used and are empty. Until now the extension then showed "Setup needed" and kept your lessons on your computer with the message "The server did not accept your key or Brain".
